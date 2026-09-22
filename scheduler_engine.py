@@ -2,6 +2,7 @@ from __future__ import annotations
 from collections import defaultdict, Counter
 from datetime import datetime, date
 import math, re, unicodedata
+from io import BytesIO
 import pandas as pd
 import openpyxl
 
@@ -43,10 +44,32 @@ def dt(v):
     return None
 
 def _open_wb(source):
-    if hasattr(source,'seek'):
-        source.seek(0)
-        return openpyxl.load_workbook(source,read_only=True,data_only=True)
-    return openpyxl.load_workbook(source,read_only=True,data_only=True)
+    """Open an uploaded workbook from a stable byte copy.
+
+    Streamlit UploadedFile objects are file-like and their cursor can be moved by
+    framework/widget operations. Using getvalue() (or a fresh read after seek)
+    prevents an exhausted stream from appearing as an empty workbook.
+    """
+    if isinstance(source, (bytes, bytearray)):
+        raw=bytes(source)
+        if not raw:
+            raise ValueError('The uploaded Excel file is empty (0 bytes). Please upload the Workday .xlsx export again.')
+        return openpyxl.load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    if hasattr(source, 'getvalue'):
+        raw=source.getvalue()
+        if not raw:
+            raise ValueError('The uploaded Excel file is empty (0 bytes). Please upload the Workday .xlsx export again.')
+        return openpyxl.load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    if hasattr(source, 'read'):
+        try:
+            source.seek(0)
+        except Exception:
+            pass
+        raw=source.read()
+        if not raw:
+            raise ValueError('The uploaded Excel file could not be read because its upload stream is empty. Please remove and re-upload the file.')
+        return openpyxl.load_workbook(BytesIO(raw), read_only=True, data_only=True)
+    return openpyxl.load_workbook(source, read_only=True, data_only=True)
 
 # Canonical headers can be recognized under these Workday/export variants.
 HEADER_ALIASES={
@@ -76,56 +99,82 @@ def _header_matches(value, canonical):
     aliases=HEADER_ALIASES.get(ck,{ck}) | {ck}
     return hv in aliases
 
-def read_sheet(source, sheet=None, header_row=None, required_headers=None, optional_headers=None, scan_rows=100):
-    """Read a Workday-style worksheet, tolerating title/filter rows and header variants.
+def read_sheet(source, sheet=None, header_row=None, required_headers=None, optional_headers=None, scan_rows=150):
+    """Read a Workday-style workbook and locate the report headers safely.
 
-    required_headers are canonical names that must be recognized. optional_headers are mapped when present
-    but do not block import (important for WID in historical exports).
+    - Uses a fresh byte copy for Streamlit uploads.
+    - Searches every worksheet when no sheet is explicitly named.
+    - Tolerates Workday title/filter rows and header aliases.
+    - Produces actionable diagnostics instead of a generic KeyError.
     """
     wb=_open_wb(source)
-    ws=wb[sheet] if sheet else wb.worksheets[0]
     required_headers=list(required_headers or [])
     optional_headers=list(optional_headers or [])
 
-    rows_iter=ws.iter_rows(values_only=True)
-    header_vals=None; found_row=None; best=(0,None,[],[])
-
-    if header_row is not None:
-        for i,row in enumerate(rows_iter,1):
-            if i==header_row:
-                header_vals=row; found_row=i; break
+    if sheet is not None:
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"Expected worksheet '{sheet}' was not found. Available worksheets: {wb.sheetnames}.")
+        candidate_sheets=[wb[sheet]]
     else:
-        # Scan a generous number of rows. Workday report filters can push headers down.
-        for i,row in enumerate(rows_iter,1):
-            if i>scan_rows: break
-            values=list(row)
-            matched=[]; missing=[]
-            for req in required_headers:
-                if any(_header_matches(v,req) for v in values): matched.append(req)
-                else: missing.append(req)
-            if len(matched)>best[0]: best=(len(matched),i,values,missing)
-            if not missing:
-                header_vals=row; found_row=i; break
+        candidate_sheets=list(wb.worksheets)
 
-    if header_vals is None:
-        best_count,best_row,best_vals,missing=best
+    workbook_best=(0,None,None,[],[])  # matches, sheet, row, values, missing
+    selected=None
+
+    for ws in candidate_sheets:
+        if header_row is not None:
+            values=[]
+            for i,row in enumerate(ws.iter_rows(values_only=True),1):
+                if i==header_row:
+                    values=list(row); break
+            if not values:
+                continue
+            missing=[req for req in required_headers if not any(_header_matches(v,req) for v in values)]
+            matched=[req for req in required_headers if req not in missing]
+            if len(matched)>workbook_best[0]: workbook_best=(len(matched),ws.title,header_row,values,missing)
+            if not missing:
+                selected=(ws,header_row,values); break
+        else:
+            for i,row in enumerate(ws.iter_rows(values_only=True),1):
+                if i>scan_rows: break
+                values=list(row)
+                matched=[]; missing=[]
+                for req in required_headers:
+                    if any(_header_matches(v,req) for v in values): matched.append(req)
+                    else: missing.append(req)
+                if len(matched)>workbook_best[0]: workbook_best=(len(matched),ws.title,i,values,missing)
+                if not missing:
+                    selected=(ws,i,values); break
+            if selected: break
+
+    if selected is None:
+        best_count,best_sheet,best_row,best_vals,missing=workbook_best
         detected=[str(v).strip() for v in best_vals if v not in (None,'')]
+        # Extra workbook diagnostics help distinguish wrong file vs. empty/blank first tab.
+        sheet_stats=[]
+        for ws in candidate_sheets:
+            nonempty=0
+            samples=[]
+            for row in ws.iter_rows(min_row=1,max_row=min(ws.max_row,10),values_only=True):
+                vals=[v for v in row if v not in (None,'')]
+                if vals:
+                    nonempty+=1
+                    if len(samples)<2: samples.append([str(v)[:80] for v in vals[:8]])
+            sheet_stats.append(f"{ws.title}: size={ws.max_row}x{ws.max_column}, nonempty rows in first 10={nonempty}, sample={samples}")
         raise ValueError(
             'The uploaded report could not be recognized. '
             f'Expected fields: {required_headers}. '
-            f'Best candidate header row: {best_row or "none"}; matched {best_count} of {len(required_headers)}. '
-            f'Missing: {missing}. Detected values on that row: {detected[:30]}. '
-            'Please confirm the correct Workday report was uploaded in this field.'
+            f'Best candidate: worksheet={best_sheet or "none"}, row={best_row or "none"}; matched {best_count} of {len(required_headers)}. '
+            f'Missing: {missing}. Detected values: {detected[:30]}. '
+            f'Workbook worksheets: {wb.sheetnames}. Sheet diagnostics: {sheet_stats}. '
+            'Please confirm the correct Workday .xlsx report was uploaded in this field.'
         )
 
+    ws,found_row,header_vals=selected
     raw_headers=list(header_vals)
-    # Map variants back to canonical names so downstream logic is stable.
     canonical_lookup={}
     for canon in required_headers+optional_headers:
         ck=header_norm(canon)
-        # Prefer an exact canonical header when the workbook contains one. This prevents
-        # broad aliases such as 'Learning Enrollment' from winning over the actual
-        # 'Enrolled Course Offering' column in reports that contain both.
         exact_idx=next((idx for idx,v in enumerate(raw_headers) if header_norm(v)==ck),None)
         if exact_idx is not None:
             canonical_lookup[exact_idx]=canon
@@ -141,10 +190,8 @@ def read_sheet(source, sheet=None, header_row=None, required_headers=None, optio
         if seen[h]>1: h=f'{h}_{seen[h]}'
         headers.append(h)
 
-    # If we stopped scanning before header, restart iterator after the found row.
-    rows_iter=ws.iter_rows(min_row=found_row+1,values_only=True)
     out=[]
-    for row in rows_iter:
+    for row in ws.iter_rows(min_row=found_row+1,values_only=True):
         if not any(v not in (None,'') for v in row): continue
         vals=list(row)+[None]*(len(headers)-len(row))
         out.append(dict(zip(headers,vals[:len(headers)])))
