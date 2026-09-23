@@ -1,4 +1,4 @@
-# Class Scheduling Batch Tool — Simplified v2.2
+# Class Scheduling Batch Tool — Simplified v2.3
 
 This version is a stateless Streamlit batch scheduler. It does not use SQLite and it does not include an approve/deny workflow.
 
@@ -71,3 +71,8 @@ You can download/edit/re-upload this workbook from the app. No server-side datab
 ## Email drafts
 
 Email drafts can be downloaded directly after scheduling. They are `.eml` drafts only; the app does not send messages automatically.
+
+
+## v2.3 startup simplification
+
+`batch_utils.py` has been removed. All upload validation, export-package creation, and email-draft helpers now live directly in `app.py`, preventing mixed-version import errors.
