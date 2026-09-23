@@ -34,9 +34,7 @@ def config_frames(source_bytes=None):
     needed=['Training Rules','Locations','Equivalencies','Manual Routing']
     missing=[x for x in needed if x not in sheets]
     if missing: raise ValueError(f'Configuration workbook is missing sheets: {missing}')
-    rules=_active(sheets['Training Rules']).where(pd.notna(sheets['Training Rules']),'') if False else _active(sheets['Training Rules'])
-    locations=sheets['Locations'].copy(); eq=_active(sheets['Equivalencies']); routing=_active(sheets['Manual Routing'])
-    # Pandas reads blank Excel cells as NaN. The scheduler expects blank strings/None, not the literal text "nan".
+    rules=_active(sheets['Training Rules']); locations=sheets['Locations'].copy(); eq=_active(sheets['Equivalencies']); routing=_active(sheets['Manual Routing'])
     rules=rules.where(pd.notna(rules),''); locations=locations.where(pd.notna(locations),''); eq=eq.where(pd.notna(eq),''); routing=routing.where(pd.notna(routing),'')
     return rules,locations,eq,routing
 
@@ -60,19 +58,34 @@ def workday_export(req, contingent=False):
     bio=BytesIO(); wb.save(bio); return bio.getvalue(),len(rows)
 
 def audit_workbook(result):
-    req=result['requirements'].copy(); events=result['events'].copy(); seat=result['seat_reservations'].copy()
-    summary=events[['Event_Key','Worker_Name','Employee_ID','WID','Event_Type','Anchor_Date','Position_Title','Cost_Center_Title','Hiring_Manager_AD']].drop_duplicates().copy()
-    by=req.groupby('Event_Key')['Disposition'].value_counts().unstack(fill_value=0)
-    summary=summary.merge(by,left_on='Event_Key',right_index=True,how='left')
-    summary['Approval']=''; summary['Denial Reason']=''; summary['Reviewer']=''; summary['Review Date']=''
+    """Operational workbook. No application approval step is required."""
+    req=result['requirements'].copy(); seat=result['seat_reservations'].copy()
+    selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy()
+    selected_cols=[
+        'Event_Key','Worker_Name','Employee_ID','WID','Worker_Type','Event_Type','Anchor_Date','Position_Title','Job_Code',
+        'Cost_Center_ID','Cost_Center_Title','Training_Title','Selected_Session_WID','Selected_Reference_ID','Selected_Start',
+        'Selected_End','Selected_Location','Distance_Miles','Scheduling_Policy','Prerequisite','Prerequisite_Status','Explanation'
+    ]
+    selected=selected[[c for c in selected_cols if c in selected.columns]]
     review=req[req['Disposition'].isin(['REVIEW_REQUIRED','MANUAL_SCHEDULING_REQUIRED'])].copy()
+    summary=pd.DataFrame([
+        {
+            **result.get('source_counts',{}),
+            'requirements':len(req),
+            'proposed_schedule':int((req['Disposition']=='PROPOSED_SCHEDULE').sum()),
+            'review_required':int((req['Disposition']=='REVIEW_REQUIRED').sum()),
+            'manual_scheduling_required':int((req['Disposition']=='MANUAL_SCHEDULING_REQUIRED').sum()),
+            'previously_completed':int(req['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION']).sum()),
+            'already_enrolled':int((req['Disposition']=='ALREADY_ENROLLED').sum()),
+        }
+    ])
     bio=BytesIO()
     with pd.ExcelWriter(bio,engine='openpyxl') as xw:
-        summary.to_excel(xw,index=False,sheet_name='Employee Approval')
+        selected.to_excel(xw,index=False,sheet_name='Selected Sessions')
         req.to_excel(xw,index=False,sheet_name='Requirement Audit')
         review.to_excel(xw,index=False,sheet_name='Review Queue')
         seat.to_excel(xw,index=False,sheet_name='Seat Audit')
-        pd.DataFrame([result.get('source_counts',{})]).to_excel(xw,index=False,sheet_name='Run Summary')
+        summary.to_excel(xw,index=False,sheet_name='Run Summary')
     bio.seek(0); wb=openpyxl.load_workbook(bio)
     from openpyxl.styles import Font,PatternFill,Alignment
     fill=PatternFill('solid',fgColor='1F4E78'); font=Font(color='FFFFFF',bold=True)
@@ -95,37 +108,43 @@ def results_zip(result):
     req=result['requirements']; emp,emp_n=workday_export(req,False); cw,cw_n=workday_export(req,True); audit=audit_workbook(result)
     z=BytesIO()
     with ZipFile(z,'w',ZIP_DEFLATED) as zipf:
-        zipf.writestr('Scheduling_Audit_and_Approval.xlsx',audit)
+        zipf.writestr('Scheduling_Results_and_Audit.xlsx',audit)
         zipf.writestr('Workday/Enroll_In_Learning_Content_Employees.xlsx',emp)
         if cw_n: zipf.writestr('Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx',cw)
-        zipf.writestr('README.txt',f'Generated {datetime.now():%Y-%m-%d %H:%M}. Employee Workday rows: {emp_n}. Contingent Worker rows: {cw_n}. Review Scheduling_Audit_and_Approval.xlsx before Workday upload.\n')
+        zipf.writestr('README.txt',
+            f'Generated {datetime.now():%Y-%m-%d %H:%M}. Employee Workday rows: {emp_n}. Contingent Worker rows: {cw_n}.\n'
+            'Scheduling_Results_and_Audit.xlsx contains Selected Sessions, Requirement Audit, Review Queue, Seat Audit, and Run Summary.\n'
+            'The files in the Workday folder retain the supplied Workday upload format.\n')
     return z.getvalue(),emp_n,cw_n
 
-def make_approved_emails(reviewed_bytes, req, routing):
-    wb=pd.read_excel(BytesIO(reviewed_bytes),sheet_name=None,engine='openpyxl')
-    if 'Employee Approval' not in wb: raise ValueError('Reviewed workbook must contain Employee Approval sheet.')
-    appr=wb['Employee Approval'].copy(); appr['Approval']=appr['Approval'].fillna('').astype(str).str.strip().str.upper()
-    approved=set(appr.loc[appr['Approval']=='APPROVED','Event_Key'].astype(str))
+def make_email_drafts(req, routing):
+    """Generate drafts directly from the current scheduling result; no approval upload is required."""
     route={norm(r['training_title']):clean(r['recipient_email']) for _,r in routing.iterrows() if clean(r.get('training_title'))}
-    z=BytesIO(); count=0
+    z=BytesIO(); manager_count=0
     with ZipFile(z,'w',ZIP_DEFLATED) as zipf:
-        for ek in sorted(approved):
+        # One manager draft per staffing event with at least one selected session.
+        for ek in sorted(req.loc[req['Disposition']=='PROPOSED_SCHEDULE','Event_Key'].astype(str).unique()):
             rows=req[req['Event_Key'].astype(str)==ek]
             if rows.empty: continue
             r0=rows.iloc[0]
             lines=[f"Employee: {r0['Worker_Name']}",f"Employee ID: {r0['Employee_ID']}",f"Position: {r0['Position_Title']}",f"Hire / Effective Date: {pd.to_datetime(r0['Anchor_Date']).strftime('%m/%d/%Y') if pd.notna(r0['Anchor_Date']) else ''}",'','Scheduled Training','------------------']
-            for _,r in rows[rows['Disposition']=='PROPOSED_SCHEDULE'].iterrows():
-                d=pd.to_datetime(r['Selected_Start']) if pd.notna(r['Selected_Start']) else None
-                lines.append(f"• {r['Training_Title']} — {d.strftime('%m/%d/%Y') if d is not None else ''} — {r['Selected_Location']}")
+            for _,r in rows[rows['Disposition']=='PROPOSED_SCHEDULE'].sort_values('Selected_Start').iterrows():
+                st=pd.to_datetime(r['Selected_Start']) if pd.notna(r['Selected_Start']) else None
+                en=pd.to_datetime(r['Selected_End']) if pd.notna(r.get('Selected_End')) else None
+                time_text=''
+                if st is not None:
+                    time_text=st.strftime('%m/%d/%Y %I:%M %p')
+                    if en is not None: time_text += ' - ' + en.strftime('%I:%M %p')
+                lines.append(f"• {r['Training_Title']} — {time_text} — {r['Selected_Location']}")
             done=rows[rows['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION'])]
             if not done.empty:
                 lines+=['','Previously Completed — No New Assignment','----------------------------------------']
                 for _,r in done.iterrows(): lines.append(f"• {r['Training_Title']} — {r.get('Completion_Date','')}")
             body='\n'.join(lines); subject=f"Training Schedule - {r0['Worker_Name']}"
-            zipf.writestr(f"Manager Emails/{ek}.eml",eml_bytes(clean(r0['Hiring_Manager_AD']),subject,body)); count+=1
+            zipf.writestr(f"Manager Emails/{ek}.eml",eml_bytes(clean(r0['Hiring_Manager_AD']),subject,body)); manager_count+=1
         manual=req[req['Disposition']=='MANUAL_SCHEDULING_REQUIRED']
         for idx,r in manual.iterrows():
             recipient=route.get(norm(r['Training_Title']),''); subject=f"Manual scheduling request - {r['Training_Title']} - {r['Worker_Name']}"
             body=f"Please schedule the following employee for {r['Training_Title']}.\n\nEmployee: {r['Worker_Name']}\nEmployee email: {r.get('Work_Email') or r.get('Home_Email')}\nEmployee ID: {r['Employee_ID']}\nHire / Position Effective Date: {r['Anchor_Date']}\nPosition: {r['Position_Title']}\nCost Center: {r['Cost_Center_Title']} ({r['Cost_Center_ID']})\nHiring Manager: {r['Hiring_Manager_AD']}\n"
             zipf.writestr(f"Manual Scheduling/{idx}.eml",eml_bytes(recipient,subject,body))
-    return z.getvalue(),count,len(manual)
+    return z.getvalue(),manager_count,len(manual)

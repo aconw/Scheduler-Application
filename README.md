@@ -1,57 +1,73 @@
-# Class Scheduling Batch Tool — Simplified v2.1
+# Class Scheduling Batch Tool — Simplified v2.2
 
-This version fixes Workday Excel exports whose worksheet dimension metadata incorrectly reports `A1:A1`. The application deliberately opens Workday `.xlsx` files in normal OpenPyXL mode rather than read-only mode so all rows are detected.
+This version is a stateless Streamlit batch scheduler. It does not use SQLite and it does not include an approve/deny workflow.
 
-# Class Scheduling Batch Tool — Simplified Build
+## Run workflow
 
-This version is intentionally stateless. It does not use SQLite and does not rely on persistent Streamlit storage.
+Upload these reports for each run:
 
-## Deploy
-1. Create/update your GitHub repository.
-2. Upload all files and folders from this application folder so `app.py` is at the repository root.
-3. In Streamlit Community Cloud, deploy `main/app.py`.
-4. Reboot the app after replacing the old build.
+- New Hire Orientation Report and/or New / Additional Job Change Report
+- Training History / Learning Transcript
+- Learning Content / Available Sessions
+- Existing Orientation Schedule **(required for overlap prevention)**
 
-## Every scheduling run
-1. Upload New Hire and/or Job Change report.
-2. Upload Training History.
-3. Upload Available Sessions.
-4. Optionally upload Existing Orientation Schedule.
-5. Confirm every required report shows a green preflight validation message.
-6. Click **Run Scheduling**.
-7. Download **Class_Scheduling_Results_Package.zip**.
+Then click **Run Scheduling** and download the export package.
 
-The package contains the Workday files plus `Scheduling_Audit_and_Approval.xlsx`.
+## Export package
 
-## Approval / emails
-1. Open `Scheduling_Audit_and_Approval.xlsx`.
-2. On **Employee Approval**, enter `APPROVED` or `DENIED` for each staffing event. Enter a denial reason when denied.
-3. Save the workbook.
-4. Upload it back to the app under **Generate Email Drafts After Review**.
-5. Download the `.eml` email-draft ZIP.
+`Class_Scheduling_Export_Package.zip` contains:
+
+- `Workday/Enroll_In_Learning_Content_Employees.xlsx` — exact employee Workday upload format
+- `Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx` — generated only when applicable
+- `Scheduling_Results_and_Audit.xlsx`
+  - `Selected Sessions`
+  - `Requirement Audit`
+  - `Review Queue`
+  - `Seat Audit`
+  - `Run Summary`
+
+There is no approval sheet and no review workbook that must be uploaded back into the app.
+
+## Non-overlap rule
+
+The scheduler will not select a session if it overlaps another class for the same employee.
+
+It checks against:
+
+1. Classes already scheduled in the uploaded Existing Orientation Schedule report.
+2. Classes newly selected earlier in the current scheduling run, including selections generated for another staffing event belonging to the same employee.
+
+Intervals use standard half-open timing: a class ending at exactly 10:00 AM may be followed by a class starting at exactly 10:00 AM.
+
+If otherwise-eligible sessions all conflict with the employee's schedule, the requirement becomes `REVIEW_REQUIRED` and the Requirement Audit explains the conflict.
+
+## Other scheduling rules retained
+
+- WID is the durable identity where available; Employee ID is the business identifier/fallback.
+- Candidate Position ID is Job Code for new hires.
+- General and supervisory-organization-specific training requirements are additive.
+- Any historical completion permanently satisfies the requirement.
+- Configured equivalent historical courses may satisfy a current requirement.
+- Existing active enrollment suppresses duplicate registration.
+- Physical sessions are preferred to virtual sessions.
+- Nearest eligible physical site is prioritized, with a 130-mile limit.
+- TARGET_RANGE does not automatically schedule outside the required range.
+- FIRST_AVAILABLE chooses the earliest eligible session at the nearest eligible location.
+- Seats are consumed within the run to prevent double assignment.
+- Prerequisites must be scheduled earlier and can be chained.
+- FLAG_MANUAL remains a manual-scheduling disposition.
 
 ## Configuration
-`config/Scheduler_Configuration.xlsx` is the source of truth for:
+
+`config/Scheduler_Configuration.xlsx` is the configuration source and contains:
+
 - Training Rules
 - Locations
 - Equivalencies
-- FLAG_MANUAL routing
+- Manual Routing
 
-Keep the master copy in SharePoint or OneDrive. The app includes a download button for the configuration workbook. You can edit it in Excel and upload the edited workbook in the Configuration section for a run. For permanent changes, replace `config/Scheduler_Configuration.xlsx` in GitHub with the reviewed version.
+You can download/edit/re-upload this workbook from the app. No server-side database is required.
 
-## Important mapping
-For New Hire records, **Candidate Position ID = Job Code**.
+## Email drafts
 
-## Business rules included
-- WID is preferred as durable identity; Employee ID is used as the business identifier/fallback.
-- Historical completion permanently satisfies a requirement.
-- Configured equivalents satisfy the current course.
-- Existing registration suppresses duplicate scheduling.
-- Job Code + Cost Center and matching Sup Org rules are additive.
-- TARGET_RANGE stays inside the range or goes to review.
-- FIRST_AVAILABLE prioritizes nearest physical location, then earliest eligible session there.
-- Physical wins over virtual when eligible.
-- 130-mile maximum for physical training.
-- Seats are consumed during a run.
-- Prerequisites must be scheduled earlier.
-- Employee and contingent-worker Workday files are separate.
+Email drafts can be downloaded directly after scheduling. They are `.eml` drafts only; the app does not send messages automatically.

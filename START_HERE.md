@@ -1,28 +1,45 @@
-# Simplified Class Scheduling App v2.1 — Replace v2.0
+# Replace the Existing Streamlit App with v2.2
 
-This release fixes a Workday Excel compatibility issue discovered with the uploaded Training History report.
+This is a complete replacement build, not a patch.
 
-## What was wrong
-Some Workday-generated `.xlsx` files contain incorrect worksheet dimension metadata (`A1:A1`) even though thousands of rows are present. OpenPyXL read-only mode trusts that metadata and therefore sees only cell A1. Version 2.1 opens Workday report files in normal mode so all rows are available.
+## GitHub
 
-## Replace the current GitHub files
-Replace the contents of the current Streamlit repository with the contents of this folder, or at minimum replace:
+Replace the files in the current repository with the contents of this folder. Your repository root should include:
 
-- `scheduler_engine.py`
-- `batch_utils.py`
-- `app.py`
+```
+app.py
+batch_utils.py
+scheduler_engine.py
+requirements.txt
+README.md
+START_HERE.md
+assets/
+config/
+```
 
-Commit the changes to `main`. Streamlit should redeploy automatically; reboot the app once if needed.
+Remove older database-related files/folders if they are still present; v2.2 does not use them.
 
-## Confirm the correct release
-Below the app title, confirm you see:
+Commit the changes to `main`. Streamlit should redeploy automatically. Reboot once if needed.
 
-`Simplified stateless build v2.1`
+## Confirm the correct version
 
-Then re-upload the reports. For the supplied `test history 2026-09-22 13_46 EDT.xlsx`, preflight should report approximately:
+The subtitle beneath the app title must say:
 
-- 2,812,000 bytes
-- Sheet1: 28,413 rows × 19 columns
-- 28,403 data rows
+**Simplified stateless build v2.2 • No approval step • Non-overlapping scheduling • Workday files + requirement audit**
 
-The warning `Workbook contains no default style` is harmless and comes from the Workday export format.
+## Each scheduling run
+
+Upload:
+
+1. New Hire report and/or Job Change report
+2. Training History
+3. Available Sessions
+4. Existing Orientation Schedule (required for conflict checking)
+
+All preflight checks must be green before **Run Scheduling** becomes available.
+
+## Download
+
+Use **Download Scheduling Export Package**.
+
+The ZIP contains Workday-ready enrollment files plus `Scheduling_Results_and_Audit.xlsx` with the selected-session list and complete Requirement Audit. No approve/deny step is required.

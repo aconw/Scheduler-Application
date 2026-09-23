@@ -229,6 +229,14 @@ def timing_ok(rec, start_dt):
         t=mx if mx is not None else mn; return t is None or delta<=t
     return (mn is None or delta>=mn) and (mx is None or delta<=mx)
 
+def intervals_overlap(start_a, end_a, start_b, end_b):
+    """Half-open interval overlap test. Back-to-back sessions are allowed."""
+    return start_a < end_b and end_a > start_b
+
+def _person_key(wid, employee_id):
+    wid=id_norm(wid); employee_id=id_norm(employee_id)
+    return f'WID:{wid}' if wid else f'EID:{employee_id}'
+
 def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, rules_df, locations_df, equivalencies_df=None, orientation_file=None):
     new_hires=read_sheet(new_hire_file,required_headers=['Employee ID','WID','Hire Date','Candidate Cost Center ID']) if new_hire_file else []
     job_changes=read_sheet(job_change_file,required_headers=['Employee ID','WID','Effective Date','Job Code - Proposed']) if job_change_file else []
@@ -238,8 +246,8 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
         required_headers=['Employee ID','Record Learning Content','Record Completion Status'],
         optional_headers=['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date']
     )
-    sessions=read_sheet(sessions_file,required_headers=['Learning Content Type','Title','Reference ID','Start Date','Available Seats','WID'])
-    orientation=read_sheet(orientation_file,required_headers=['Employee ID','Enrolled Course Offering','Registration Status','Start Date']) if orientation_file else []
+    sessions=read_sheet(sessions_file,required_headers=['Learning Content Type','Title','Reference ID','Start Date','End Date','Available Seats','WID'])
+    orientation=read_sheet(orientation_file,required_headers=['Employee ID','Enrolled Course Offering','Registration Status','Start Date','End Date']) if orientation_file else []
 
     loc_by_name={}
     for _,r in locations_df.iterrows():
@@ -303,6 +311,28 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     for s in sessions:
         if clean(s.get('Title')): sessions_by_title[norm(s.get('Title'))].append(s)
 
+    # Employee time constraints. Existing scheduled/enrolled classes are blocked before
+    # any new selections are made. New selections are added as the run proceeds, so
+    # one employee can never receive two overlapping sessions, even across staffing events.
+    eid_to_wid={}
+    for ev in events:
+        if ev.get('Employee_ID') and ev.get('WID'):
+            eid_to_wid[id_norm(ev['Employee_ID'])]=id_norm(ev['WID'])
+    for eid,wid in emp_to_hist_wid.items():
+        if eid and wid: eid_to_wid[id_norm(eid)]=id_norm(wid)
+    busy_by_person=defaultdict(list)
+    for o in orientation:
+        if norm(o.get('Registration Status')) not in ACTIVE_REGISTRATION_STATUSES:
+            continue
+        st=dt(o.get('Start Date')); en=dt(o.get('End Date'))
+        if not st or not en or en <= st:
+            continue
+        eid=id_norm(o.get('Employee ID')); pkey=_person_key(eid_to_wid.get(eid,''),eid)
+        busy_by_person[pkey].append({
+            'start':st,'end':en,'source':'EXISTING_SCHEDULE',
+            'title':clean(o.get('Enrolled Course Offering')),'event_key':'',
+        })
+
     reqs=[]; seen=set()
     for ev in events:
         if norm(ev['Contingent_Action'])=='no schedule': continue
@@ -322,7 +352,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     reservations=[]
 
     for rec in reqs:
-        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
+        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         title_n=norm(rec['Training_Title']); person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
         satisfy_titles={title_n}|eq.get(title_n,set())
         completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfy_titles and norm(h.get('Record Completion Status'))=='completed']
@@ -380,21 +410,38 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
 
             all_s=sessions_by_title.get(norm(rec['Training_Title']),[])
             if not all_s: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='No session title matches this training requirement.'; continue
-            candidates=[]
+            candidates=[]; overlap_rejected=[]; structurally_eligible=[]
+            pkey=_person_key(rec.get('WID'),rec.get('Employee_ID'))
             for s in all_s:
-                st=dt(s.get('Start Date')); k=skey(s)
-                if norm(s.get('Availability Status'))!='open' or not st or remaining.get(k,0)<=0: continue
+                st=dt(s.get('Start Date')); en=dt(s.get('End Date')); k=skey(s)
+                if norm(s.get('Availability Status'))!='open' or not st or not en or en <= st: continue
                 if rec['Anchor_Date'] and st < rec['Anchor_Date']: continue
                 if prereq_bound and st <= prereq_bound: continue
                 if not timing_ok(rec,st): continue
+                structurally_eligible.append(s)
+                if remaining.get(k,0)<=0: continue
+                conflicts=[b for b in busy_by_person.get(pkey,[]) if intervals_overlap(st,en,b['start'],b['end'])]
+                if conflicts:
+                    overlap_rejected.append((s,conflicts))
+                    continue
                 candidates.append(s)
             if not candidates:
-                possible=[]
-                for s in all_s:
-                    st=dt(s.get('Start Date'))
-                    if norm(s.get('Availability Status'))=='open' and st and (not rec['Anchor_Date'] or st>=rec['Anchor_Date']) and (not prereq_bound or st>prereq_bound) and timing_ok(rec,st): possible.append(s)
-                exhausted=[s for s in possible if opening.get(skey(s),0)>0 and remaining.get(skey(s),0)<=0]
-                rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Eligible session capacity was consumed by earlier assignments in this run.' if exhausted else 'No open session with remaining seats meets date/policy/prerequisite criteria.'; continue
+                capacity_available=[s for s in structurally_eligible if remaining.get(skey(s),0)>0]
+                exhausted=[s for s in structurally_eligible if opening.get(skey(s),0)>0 and remaining.get(skey(s),0)<=0]
+                rec['Disposition']='REVIEW_REQUIRED'
+                if capacity_available and overlap_rejected and len(overlap_rejected) >= len(capacity_available):
+                    titles=[]
+                    for _,conflicts in overlap_rejected[:5]:
+                        for b in conflicts:
+                            label=f"{b['title']} ({b['start']:%m/%d/%Y %I:%M %p}-{b['end']:%I:%M %p})"
+                            if label not in titles: titles.append(label)
+                    rec['Conflict_Detail']='; '.join(titles)
+                    rec['Explanation']='All otherwise eligible sessions overlap an existing or newly selected class for this employee.'
+                elif exhausted:
+                    rec['Explanation']='Eligible session capacity was consumed by earlier assignments in this run.'
+                else:
+                    rec['Explanation']='No open session with remaining seats meets date/policy/prerequisite/non-overlap criteria.'
+                continue
             physical=[s for s in candidates if clean(s.get('Locations'))]; virtual=[s for s in candidates if not clean(s.get('Locations'))]
             mapped=[]
             for s in physical:
@@ -419,12 +466,15 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             remaining[k]=before-1
             rec.update({'Disposition':'PROPOSED_SCHEDULE','Selected_Session_WID':id_norm(chosen.get('WID')),'Selected_Reference_ID':clean(chosen.get('Reference ID')),'Selected_Start':chosen.get('Start Date'),'Selected_End':chosen.get('End Date'),'Selected_Location':clean(chosen.get('Locations')) or 'Virtual','Distance_Miles':chosen_dist,'Original_Available_Seats':opening.get(k,0),'Remaining_Seats_After_Reservation':remaining[k],'Workday_Ready':'Yes','Explanation':explanation})
             if prereq_bound: rec['Explanation'] += f" Prerequisite scheduled earlier ({prereq_bound.strftime('%m/%d/%Y')})."
-            reservations.append({'Session_Key':k,'Training_Title':rec['Training_Title'],'Start_Date':chosen.get('Start Date'),'Location':clean(chosen.get('Locations')) or 'Virtual','Employee_ID':rec['Employee_ID'],'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[k]})
+            chosen_st=dt(chosen.get('Start Date')); chosen_en=dt(chosen.get('End Date'))
+            if chosen_st and chosen_en and chosen_en > chosen_st:
+                busy_by_person[pkey].append({'start':chosen_st,'end':chosen_en,'source':'SELECTED','title':rec['Training_Title'],'event_key':rec['Event_Key']})
+            reservations.append({'Session_Key':k,'Training_Title':rec['Training_Title'],'Start_Date':chosen.get('Start Date'),'End_Date':chosen.get('End Date'),'Location':clean(chosen.get('Locations')) or 'Virtual','Employee_ID':rec['Employee_ID'],'WID':rec['WID'],'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[k]})
 
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
 
-    req_columns=['Event_Key','Event_Type','Employee_ID','WID','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_columns=['Event_Key','Event_Type','Employee_ID','WID','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     requirements_df=pd.DataFrame(reqs,columns=req_columns)
     return {'events':pd.DataFrame(events),'requirements':requirements_df,'sessions':pd.DataFrame(sessions),'seat_reservations':pd.DataFrame(reservations),'summary':dict(Counter(r['Disposition'] for r in reqs)),'source_counts':{'new_hires':len(new_hires),'job_changes':len(job_changes),'history':len(history),'sessions':len(sessions)},'warning':''}
 
