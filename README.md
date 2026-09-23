@@ -1,15 +1,21 @@
-# Class Scheduling Batch Tool — Simplified v2.4
+# Class Scheduling Batch Tool — Simplified v2.5
 
-This version is a stateless Streamlit batch scheduler. It does not use SQLite and it does not include an approve/deny workflow.
+This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
+
+## Important v2.5 behavior
+
+Before training requirements are generated, the scheduler collapses duplicate source staffing events for the same person when event type, hire/effective date, job/position context, cost center, supervisory organization, physical location, worker type, and traveler designation are identical.
+
+The canonical staffing event is scheduled once. Duplicate source rows remain visible on the **Duplicate Source Events** audit sheet but cannot reserve seats or create Workday enrollments.
 
 ## Run workflow
 
-Upload these reports for each run:
+Upload for each run:
 
 - New Hire Orientation Report and/or New / Additional Job Change Report
 - Training History / Learning Transcript
 - Learning Content / Available Sessions
-- Existing Orientation Schedule **(required for overlap prevention)**
+- Existing Orientation Schedule (required for overlap prevention)
 
 Then click **Run Scheduling** and download the export package.
 
@@ -17,67 +23,44 @@ Then click **Run Scheduling** and download the export package.
 
 `Class_Scheduling_Export_Package.zip` contains:
 
-- `Workday/Enroll_In_Learning_Content_Employees.xlsx` — exact employee Workday upload format
-- `Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx` — generated only when applicable
+- `Workday/Enroll_In_Learning_Content_Employees.xlsx`
+- `Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx` when applicable
 - `Scheduling_Results_and_Audit.xlsx`
-  - `Selected Sessions`
-  - `Requirement Audit`
-  - `Review Queue`
-  - `Seat Audit`
-  - `Run Summary`
+  - Selected Sessions
+  - Requirement Audit
+  - Review Queue
+  - Seat Audit
+  - Duplicate Source Events
+  - Run Summary
 
-There is no approval sheet and no review workbook that must be uploaded back into the app.
+## Scheduling protections
 
-
-## Person-level duplicate prevention (v2.4)
-
-Every staffing event is still evaluated independently, but the same WID/person is enrolled in a given training course only once per run. Additional staffing events requiring that same course remain visible in the Requirement Audit as `SATISFIED_BY_SAME_RUN_ASSIGNMENT` and reference the enrollment that satisfies them. The Workday export also independently deduplicates by person + course and person + session.
-
-## Non-overlap rule
-
-The scheduler will not select a session if it overlaps another class for the same employee.
-
-It checks against:
-
-1. Classes already scheduled in the uploaded Existing Orientation Schedule report.
-2. Classes newly selected earlier in the current scheduling run, including selections generated for another staffing event belonging to the same employee.
-
-Intervals use standard half-open timing: a class ending at exactly 10:00 AM may be followed by a class starting at exactly 10:00 AM.
-
-If otherwise-eligible sessions all conflict with the employee's schedule, the requirement becomes `REVIEW_REQUIRED` and the Requirement Audit explains the conflict.
-
-## Other scheduling rules retained
-
-- WID is the durable identity where available; Employee ID is the business identifier/fallback.
 - Candidate Position ID is Job Code for new hires.
-- General and supervisory-organization-specific training requirements are additive.
-- Any historical completion permanently satisfies the requirement.
+- WID is the preferred durable person identity.
+- Duplicate source staffing events are collapsed before requirement generation.
+- General and supervisory-organization-specific requirements are additive.
+- Historical completion permanently satisfies a requirement.
 - Configured equivalent historical courses may satisfy a current requirement.
 - Existing active enrollment suppresses duplicate registration.
+- A person/course is selected only once in a run.
+- A person/session is selected only once in a run.
+- Employee sessions may not overlap.
+- Existing Workday orientation classes are treated as blocked time.
 - Physical sessions are preferred to virtual sessions.
-- Nearest eligible physical site is prioritized, with a 130-mile limit.
-- TARGET_RANGE does not automatically schedule outside the required range.
+- Nearest eligible physical site is prioritized within the 130-mile limit.
+- TARGET_RANGE does not schedule outside the configured window.
 - FIRST_AVAILABLE chooses the earliest eligible session at the nearest eligible location.
-- Seats are consumed within the run to prevent double assignment.
-- Prerequisites must be scheduled earlier and can be chained.
+- Seats are consumed inside the run to prevent double assignment.
+- Prerequisites must occur earlier and may be chained.
 - FLAG_MANUAL remains a manual-scheduling disposition.
 
 ## Configuration
 
-`config/Scheduler_Configuration.xlsx` is the configuration source and contains:
+`config/Scheduler_Configuration.xlsx` contains:
 
 - Training Rules
 - Locations
 - Equivalencies
 - Manual Routing
 
-You can download/edit/re-upload this workbook from the app. No server-side database is required.
-
-## Email drafts
-
-Email drafts can be downloaded directly after scheduling. They are `.eml` drafts only; the app does not send messages automatically.
-
-
-## v2.4 startup simplification
-
-`batch_utils.py` has been removed. All upload validation, export-package creation, and email-draft helpers now live directly in `app.py`, preventing mixed-version import errors.
+The configuration workbook may be downloaded, edited, and uploaded back into the app. No server-side database is required.

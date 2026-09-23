@@ -237,6 +237,27 @@ def _person_key(wid, employee_id):
     wid=id_norm(wid); employee_id=id_norm(employee_id)
     return f'WID:{wid}' if wid else f'EID:{employee_id}'
 
+def _event_signature(ev):
+    """Identity for duplicate source staffing rows.
+
+    Two rows are duplicates only when the same person, event type, anchor date,
+    job/position context, organization, and physical location all match. This
+    deliberately runs before requirement generation so a duplicated Workday
+    source row cannot build a second prerequisite chain.
+    """
+    anchor=ev.get('Anchor_Date')
+    if isinstance(anchor,datetime): anchor=anchor.isoformat()
+    elif isinstance(anchor,date): anchor=anchor.isoformat()
+    else: anchor=str(anchor or '')
+    return (
+        ev.get('Person_Key') or _person_key(ev.get('WID'),ev.get('Employee_ID')),
+        norm(ev.get('Event_Type')), anchor,
+        norm(ev.get('Job_Code')), norm(ev.get('Position_Title')),
+        norm(ev.get('Cost_Center_ID')), norm(ev.get('Sup_Org_ID')),
+        norm(ev.get('Physical_Location')), norm(ev.get('Worker_Type')),
+        norm(ev.get('Traveler_Designation')),
+    )
+
 def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, rules_df, locations_df, equivalencies_df=None, orientation_file=None):
     new_hires=read_sheet(new_hire_file,required_headers=['Employee ID','WID','Hire Date','Candidate Cost Center ID']) if new_hire_file else []
     job_changes=read_sheet(job_change_file,required_headers=['Employee ID','WID','Effective Date','Job Code - Proposed']) if job_change_file else []
@@ -299,6 +320,26 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     for ev in events:
         ev['Person_Key']=_person_key(ev.get('WID'),ev.get('Employee_ID'))
         ev['Current_Employee_ID']=latest_id_by_person.get(ev['Person_Key'],(None,id_norm(ev.get('Employee_ID'))))[1] or id_norm(ev.get('Employee_ID'))
+
+    # Collapse exact duplicate staffing rows BEFORE training requirements are
+    # generated. Distinct positions/events are preserved; only rows whose
+    # person + event + role/org/location signature is identical are removed.
+    raw_event_count=len(events)
+    canonical_events=[]; duplicate_events=[]; event_by_signature={}
+    for ev in events:
+        sig=_event_signature(ev)
+        prior=event_by_signature.get(sig)
+        if prior is None:
+            ev['Event_Status']='CANONICAL'
+            ev['Canonical_Event_Key']=ev['Event_Key']
+            event_by_signature[sig]=ev
+            canonical_events.append(ev)
+        else:
+            dup=dict(ev)
+            dup['Event_Status']='DUPLICATE_SOURCE_EVENT'
+            dup['Canonical_Event_Key']=prior['Event_Key']
+            duplicate_events.append(dup)
+    events=canonical_events
 
     rule_rows=[]
     for _,r in rules_df.iterrows():
@@ -524,7 +565,22 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
 
     req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     requirements_df=pd.DataFrame(reqs,columns=req_columns)
-    return {'events':pd.DataFrame(events),'requirements':requirements_df,'sessions':pd.DataFrame(sessions),'seat_reservations':pd.DataFrame(reservations),'summary':dict(Counter(r['Disposition'] for r in reqs)),'source_counts':{'new_hires':len(new_hires),'job_changes':len(job_changes),'history':len(history),'sessions':len(sessions)},'warning':''}
+    return {
+        'events':pd.DataFrame(events),
+        'duplicate_events':pd.DataFrame(duplicate_events),
+        'requirements':requirements_df,
+        'sessions':pd.DataFrame(sessions),
+        'seat_reservations':pd.DataFrame(reservations),
+        'summary':dict(Counter(r['Disposition'] for r in reqs)),
+        'source_counts':{
+            'new_hires':len(new_hires),'job_changes':len(job_changes),
+            'staffing_events_raw':raw_event_count,
+            'staffing_events_canonical':len(events),
+            'duplicate_source_events':len(duplicate_events),
+            'history':len(history),'sessions':len(sessions)
+        },
+        'warning':''
+    }
 
 def apply_manual_override(requirements_df, row_index, selected_session, reason):
     df=requirements_df.copy()

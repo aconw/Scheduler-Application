@@ -1,15 +1,16 @@
+# Start Here — v2.5
 
-## Important when replacing v2.4
+## Replace the current Streamlit build
 
-Delete the old `batch_utils.py` file from GitHub. v2.4 no longer uses it. The repository root should contain `app.py` and `scheduler_engine.py`, but **not** `batch_utils.py`.
+1. Unzip `Class_Scheduling_Application_Simplified_v2_5.zip`.
+2. Replace the application files in your GitHub repository with the contents of the `simple_scheduler_v2_5` folder.
+3. Commit the changes to the `main` branch.
+4. Let Streamlit redeploy, then reboot the app once if needed.
+5. Confirm the subtitle says:
 
-# Replace the Existing Streamlit App with v2.4
+**Simplified stateless build v2.5 • Duplicate source-event collapse • Person-level deduplication • Non-overlapping scheduling**
 
-This is a complete replacement build, not a patch.
-
-## GitHub
-
-Replace the files in the current repository with the contents of this folder. Your repository root should include:
+## Expected repository root
 
 ```
 app.py
@@ -17,38 +18,13 @@ scheduler_engine.py
 requirements.txt
 README.md
 START_HERE.md
+RELEASE_NOTES_v2_5.md
 assets/
 config/
 ```
 
-Remove older database-related files/folders if they are still present; v2.4 does not use them.
+## What changed
 
-Commit the changes to `main`. Streamlit should redeploy automatically. Reboot once if needed.
+v2.5 fixes duplicate source staffing rows. If Workday provides the same New Hire or Job Change event more than once for the same person, the app schedules only the first/canonical event. The duplicate row is preserved in the exported `Duplicate Source Events` audit sheet.
 
-## Confirm the correct version
-
-The subtitle beneath the app title must say:
-
-**Simplified stateless build v2.4 • No approval step • Non-overlapping scheduling • Workday files + requirement audit**
-
-## Each scheduling run
-
-Upload:
-
-1. New Hire report and/or Job Change report
-2. Training History
-3. Available Sessions
-4. Existing Orientation Schedule (required for conflict checking)
-
-All preflight checks must be green before **Run Scheduling** becomes available.
-
-## Download
-
-Use **Download Scheduling Export Package**.
-
-The ZIP contains Workday-ready enrollment files plus `Scheduling_Results_and_Audit.xlsx` with the selected-session list and complete Requirement Audit. No approve/deny step is required.
-
-
-## v2.4 startup simplification
-
-`batch_utils.py` has been removed. All upload validation, export-package creation, and email-draft helpers now live directly in `app.py`, preventing mixed-version import errors.
+This is earlier and stronger than the v2.4 person/course export protection because a duplicated staffing row can no longer build its own prerequisite chain in the first place.

@@ -73,10 +73,11 @@ def workday_export(req, contingent=False):
 def audit_workbook(result):
     """Operational workbook. No application approval step is required."""
     req=result['requirements'].copy(); seat=result['seat_reservations'].copy()
+    duplicate_events=result.get('duplicate_events',pd.DataFrame()).copy()
     selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy()
     selected_cols=[
         'Event_Key','Worker_Name','Employee_ID','WID','Worker_Type','Event_Type','Anchor_Date','Position_Title','Job_Code',
-        'Cost_Center_ID','Cost_Center_Title','Training_Title','Selected_Session_WID','Selected_Reference_ID','Selected_Start',
+        'Cost_Center_ID','Cost_Center_Title','Training_Title','Disposition','Selected_Session_WID','Selected_Reference_ID','Selected_Start',
         'Selected_End','Selected_Location','Distance_Miles','Scheduling_Policy','Prerequisite','Prerequisite_Status','Explanation'
     ]
     selected=selected[[c for c in selected_cols if c in selected.columns]]
@@ -91,6 +92,7 @@ def audit_workbook(result):
             'previously_completed':int(req['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION']).sum()),
             'already_enrolled':int((req['Disposition']=='ALREADY_ENROLLED').sum()),
             'satisfied_by_same_run_assignment':int((req['Disposition']=='SATISFIED_BY_SAME_RUN_ASSIGNMENT').sum()),
+            'duplicate_source_events':int(len(duplicate_events)),
         }
     ])
     bio=BytesIO()
@@ -99,6 +101,7 @@ def audit_workbook(result):
         req.to_excel(xw,index=False,sheet_name='Requirement Audit')
         review.to_excel(xw,index=False,sheet_name='Review Queue')
         seat.to_excel(xw,index=False,sheet_name='Seat Audit')
+        duplicate_events.to_excel(xw,index=False,sheet_name='Duplicate Source Events')
         summary.to_excel(xw,index=False,sheet_name='Run Summary')
     bio.seek(0); wb=openpyxl.load_workbook(bio)
     from openpyxl.styles import Font,PatternFill,Alignment
@@ -127,7 +130,7 @@ def results_zip(result):
         if cw_n: zipf.writestr('Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx',cw)
         zipf.writestr('README.txt',
             f'Generated {datetime.now():%Y-%m-%d %H:%M}. Employee Workday rows: {emp_n}. Contingent Worker rows: {cw_n}.\n'
-            'Scheduling_Results_and_Audit.xlsx contains Selected Sessions, Requirement Audit, Review Queue, Seat Audit, and Run Summary.\n'
+            'Scheduling_Results_and_Audit.xlsx contains Selected Sessions, Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, and Run Summary.\n'
             'The files in the Workday folder retain the supplied Workday upload format.\n')
     return z.getvalue(),emp_n,cw_n
 
@@ -168,7 +171,7 @@ CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool', page_icon='📚', layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.4 • Person-level deduplication • Non-overlapping scheduling • Workday files + requirement audit')
+st.caption('Simplified stateless build v2.5 • Duplicate source-event collapse • Person-level deduplication • Non-overlapping scheduling')
 
 if 'result' not in st.session_state: st.session_state.result=None
 if 'config_bytes' not in st.session_state: st.session_state.config_bytes=None
@@ -217,14 +220,17 @@ if st.button('Run Scheduling',type='primary',use_container_width=True,disabled=n
 if st.session_state.result is not None:
     result=st.session_state.result; req=result['requirements']; counts=req['Disposition'].value_counts().to_dict() if not req.empty and 'Disposition' in req else {}
     st.subheader('3. Results')
-    cols=st.columns(7); metrics=[('Requirements',len(req)),('Selected sessions',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
+    dup_count=len(result.get('duplicate_events',pd.DataFrame()))
+    if dup_count:
+        st.info(f'{dup_count} duplicate source staffing event(s) were collapsed before training requirements were generated. See Duplicate Source Events in the audit workbook.')
+    cols=st.columns(8); metrics=[('Requirements',len(req)),('Selected sessions',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Duplicate events collapsed',dup_count),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
     for col,(lab,val) in zip(cols,metrics): col.metric(lab,val)
     display=['Worker_Name','Employee_ID','Event_Type','Training_Title','Disposition','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Explanation']
     st.dataframe(req[[c for c in display if c in req.columns]],use_container_width=True,height=440)
 
     pkg,emp_n,cw_n=results_zip(result)
     st.subheader('4. Export')
-    st.write('The package contains exact Workday-format enrollment files plus `Scheduling_Results_and_Audit.xlsx`, which includes **Selected Sessions**, **Requirement Audit**, **Review Queue**, **Seat Audit**, and **Run Summary**. There is no approval/denial step.')
+    st.write('The package contains exact Workday-format enrollment files plus `Scheduling_Results_and_Audit.xlsx`, which includes **Selected Sessions**, **Requirement Audit**, **Review Queue**, **Seat Audit**, **Duplicate Source Events**, and **Run Summary**. There is no approval/denial step.')
     st.download_button(f'Download Scheduling Export Package ({emp_n} employee / {cw_n} contingent Workday rows)',pkg,'Class_Scheduling_Export_Package.zip',mime='application/zip',type='primary')
 
     st.subheader('5. Email Drafts (Optional)')
