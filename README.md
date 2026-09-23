@@ -1,3 +1,7 @@
+# Class Scheduling Batch Tool — Simplified v2.1
+
+This version fixes Workday Excel exports whose worksheet dimension metadata incorrectly reports `A1:A1`. The application deliberately opens Workday `.xlsx` files in normal OpenPyXL mode rather than read-only mode so all rows are detected.
+
 # Class Scheduling Batch Tool — Simplified Build
 
 This version is intentionally stateless. It does not use SQLite and does not rely on persistent Streamlit storage.
