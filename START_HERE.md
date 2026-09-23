@@ -1,80 +1,66 @@
-# Start Here — Deploy Today Without Installing Streamlit
+# START HERE — Simplified Stateless Build v2.0
 
-You do **not** need Streamlit installed on your computer to use this build.
+This is a **complete replacement** for the earlier database-backed Streamlit build.
 
-## 1. Create or use a GitHub account
-Streamlit Community Cloud deploys from a GitHub repository. A private repository is recommended because this application contains internal training configuration.
+## What changed
+- No SQLite database.
+- No persistent application state or configuration writes on Streamlit Cloud.
+- Every uploaded workbook is converted to a stable byte copy before parsing.
+- Every required report is validated on screen before **Run Scheduling** is enabled.
+- Training rules, locations, equivalencies, and manual-routing settings live in one Excel configuration workbook.
+- Approval happens in the generated Excel audit workbook rather than being stored inside Streamlit.
 
-## 2. Create a new private GitHub repository
-A suggested name is `class-scheduling-application`.
+## Replace the old GitHub app
+For the cleanest deployment, replace the old repository contents with the contents of this folder.
 
-## 3. Upload the application files
-Unzip `Class_Scheduling_Application.zip` on your computer. In GitHub, upload **the contents of the `class_scheduler_app` folder** so that `app.py` is at the repository root.
-
-The repository root should look like:
+At the repository root you should have:
 
 ```
 app.py
-database.py
+batch_utils.py
 scheduler_engine.py
 requirements.txt
 README.md
 START_HERE.md
 assets/
-data/
+config/
 ```
 
-## 4. Connect Streamlit Community Cloud to GitHub
-Sign in to Streamlit Community Cloud and connect your GitHub account/repository if you have not already done so.
+You can remove the old `database.py`, `seed_config.py`, `data/`, and `seed_data/` files. They are not used by this build.
 
-## 5. Deploy
-In Streamlit Community Cloud:
+Commit the replacement to `main`. Streamlit should redeploy automatically. Reboot the app once after deployment.
 
-1. Select **Create app**.
-2. Choose the GitHub repository you just created.
-3. Choose branch `main`.
-4. Set the entrypoint/main file to `app.py`.
-5. Deploy.
+## Verify the right build is live
+Directly below the title you should see:
 
-Streamlit Cloud reads `requirements.txt` and installs Streamlit, pandas, and openpyxl automatically.
+**Simplified stateless build v2.0**
 
-## 6. Run your first scheduling batch
-Open **New Scheduling Run** and upload:
+If you do not see that text, the replacement deployment has not taken effect yet.
 
-- New Hire Orientation Report and/or New/Additional Job Change Orientation Report
-- Training History / Learning Transcript
-- Learning Content / Available Sessions
-- Existing Orientation Schedule Report is optional during the initial scheduling run
+## First run
+Upload the Workday reports. Before the run button becomes active, the screen should show green messages similar to:
 
-Then select **Run Scheduling**.
+- Training History: ... 4,135 data rows
+- Available Sessions: ... 7,456 data rows
 
-## 7. Recommended workflow
+Only then select **Run Scheduling**.
 
-1. Review **Scheduling Results**.
-2. Resolve true exceptions in **Exception Review**. Any manual override requires a reason and is audited.
-3. Download Workday files in **Workday Export**.
-4. Complete/upload enrollment in Workday.
-5. Upload the resulting schedule in **Verification & Approval**.
-6. Approve or deny each employee/staffing-event schedule.
-7. Download hiring-manager and manual-scheduling email drafts from **Message Center**.
+## Results
+Download `Class_Scheduling_Results_Package.zip`. It contains:
 
-## 8. Configure these after launch
+- `Scheduling_Audit_and_Approval.xlsx`
+- Employee Workday enrollment file
+- Contingent-worker Workday file when applicable
 
-### Equivalencies
-Open **Equivalencies** and add legacy/replacement course titles that satisfy current training requirements.
+## Approval and email drafts
+In `Scheduling_Audit_and_Approval.xlsx`, use the **Employee Approval** sheet. Enter `APPROVED` or `DENIED` in the Approval column and a Denial Reason when denied. Save it and upload it back to the app. The app will generate `.eml` manager-email drafts for approved staffing events plus FLAG_MANUAL scheduling drafts.
 
-### FLAG_MANUAL recipients
-Open **Manual Routing** and enter the recipient email for each manual course.
+## Configuration
+The master configuration is `config/Scheduler_Configuration.xlsx`. Keep your controlled copy in SharePoint or OneDrive. It contains:
 
-### Training rules
-Open **Training Configurator**. The current training documentation is already seeded into the app.
+- Training Rules
+- Locations
+- Equivalencies
+- Manual Routing
 
-## Important: configuration backup on free Streamlit Cloud
-The free Community Cloud runtime does not guarantee that files written by a running app will persist forever across restarts/redeployments.
-
-After changing training rules, equivalencies, or manual routing, open **Audit & Backup** and download **Configuration Backup**. The app also supports restoring this workbook.
-
-For a future production deployment, the same application should be connected to a persistent hosted database.
-
-## Current new-hire mapping assumption
-The supplied New Hire report does not contain a field literally named `Job Code`. This build uses `Candidate Position ID` for new-hire rule matching. If Workday can add true Job Code to the report, that mapping should be changed before long-term production use.
+For temporary testing, upload an edited configuration workbook in the app. For a permanent configuration change, review the workbook and replace the copy under `config/` in GitHub.

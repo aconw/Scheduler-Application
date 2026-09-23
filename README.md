@@ -1,70 +1,53 @@
-# Class Scheduling Application
+# Class Scheduling Batch Tool — Simplified Build
 
-A runnable Streamlit application for matching employees/staffing events to required training, selecting eligible sessions, suppressing prior completion/existing enrollment, enforcing prerequisites and seat capacity, exporting Workday enrollment files, approving schedules, and generating email drafts.
+This version is intentionally stateless. It does not use SQLite and does not rely on persistent Streamlit storage.
 
-## What is already included
+## Deploy
+1. Create/update your GitHub repository.
+2. Upload all files and folders from this application folder so `app.py` is at the repository root.
+3. In Streamlit Community Cloud, deploy `main/app.py`.
+4. Reboot the app after replacing the old build.
 
-- 18,567 training rules seeded from the supplied Training Documentation workbook.
-- 332 standardized locations with latitude/longitude.
-- Empty Training Equivalency configuration ready for maintenance in the UI.
-- Empty FLAG_MANUAL routing configuration ready for maintenance in the UI.
-- Workday employee and contingent-worker upload templates.
-- Audit logging for rule changes, overrides, approvals, denials, and scheduling runs.
+## Every scheduling run
+1. Upload New Hire and/or Job Change report.
+2. Upload Training History.
+3. Upload Available Sessions.
+4. Optionally upload Existing Orientation Schedule.
+5. Confirm every required report shows a green preflight validation message.
+6. Click **Run Scheduling**.
+7. Download **Class_Scheduling_Results_Package.zip**.
 
-## Fastest setup: Streamlit Community Cloud (no local install)
+The package contains the Workday files plus `Scheduling_Audit_and_Approval.xlsx`.
 
-1. Create a new private GitHub repository.
-2. Upload the contents of this folder to the repository root. Keep the `assets/` and `data/` folders.
-3. Sign in at https://share.streamlit.io/ using your Streamlit account.
-4. Select **Create app** / **New app**, choose the GitHub repository, branch `main`, and set the main file path to `app.py`.
-5. Deploy.
-6. Open **New Scheduling Run** in the app and upload the operational reports for that run.
+## Approval / emails
+1. Open `Scheduling_Audit_and_Approval.xlsx`.
+2. On **Employee Approval**, enter `APPROVED` or `DENIED` for each staffing event. Enter a denial reason when denied.
+3. Save the workbook.
+4. Upload it back to the app under **Generate Email Drafts After Review**.
+5. Download the `.eml` email-draft ZIP.
 
-> Important: Streamlit Community Cloud's local filesystem is ephemeral. Configuration edits made through the deployed app may be lost after a restart/redeploy. Use **Audit & Backup → Download Configuration Backup** after changes. For long-term production, point `database.py` at a persistent SQL database or hosted storage.
+## Configuration
+`config/Scheduler_Configuration.xlsx` is the source of truth for:
+- Training Rules
+- Locations
+- Equivalencies
+- FLAG_MANUAL routing
 
-## Run locally later (optional)
+Keep the master copy in SharePoint or OneDrive. The app includes a download button for the configuration workbook. You can edit it in Excel and upload the edited workbook in the Configuration section for a run. For permanent changes, replace `config/Scheduler_Configuration.xlsx` in GitHub with the reviewed version.
 
-Install Python 3.11+ and run:
+## Important mapping
+For New Hire records, **Candidate Position ID = Job Code**.
 
-```bash
-python -m pip install -r requirements.txt
-streamlit run app.py
-```
-
-Streamlit will open the application in your browser.
-
-## Operational reports uploaded each run
-
-- New Hire Orientation Report and/or New/Additional Job Change Orientation Report
-- Training History / Learning Transcript
-- Learning Content / Available Sessions report
-- Orientation Schedule Report is optional during initial scheduling and is uploaded later for Workday verification
-
-Training documentation and location configuration are already stored in the application database and do not need to be uploaded each run.
-
-## Scheduling rules implemented
-
-- WID is the durable person identity; Employee ID is treated as a current business identifier.
-- New hires use hire date; job changes use position effective date.
-- Job Code + Cost Center rules and matching Supervisory Organization-specific rules are additive.
-- Any historical exact or configured equivalent completion suppresses reassignment permanently.
-- Existing active enrollment suppresses duplicate enrollment.
-- Physical sessions are preferred over virtual.
-- Nearest eligible physical location takes precedence, with a 130-mile maximum.
-- TARGET_RANGE never auto-schedules outside the configured range; it flags the requirement for review.
-- FIRST_AVAILABLE chooses the earliest eligible session at the nearest physical training location.
-- Seats are reserved within a run so capacity cannot be double-assigned.
-- Prerequisites must be scheduled earlier; a prerequisite may itself have prerequisites.
-- FLAG_MANUAL generates one draft request per employee/class.
-- Manual override is allowed and requires an audit reason.
-- Employee and contingent-worker Workday exports are separate.
-- Schedule approval is employee/staffing-event level; denial requires a reason.
-- Approved schedules can generate one hiring-manager `.eml` draft per employee.
-
-## Known assumption to validate
-
-The supplied New Hire report does not expose a column literally named `Job Code`. The current engine uses `Candidate Position ID` for new-hire rule matching, because that was the best available field in the supplied export. If a true Job Code can be added to that Workday report, update the `Job_Code` mapping in `scheduler_engine.py`.
-
-## Email drafts
-
-The app downloads messages as `.eml` files with the `X-Unsent: 1` header. Outlook commonly opens these as editable unsent messages. No messages are automatically sent in this version.
+## Business rules included
+- WID is preferred as durable identity; Employee ID is used as the business identifier/fallback.
+- Historical completion permanently satisfies a requirement.
+- Configured equivalents satisfy the current course.
+- Existing registration suppresses duplicate scheduling.
+- Job Code + Cost Center and matching Sup Org rules are additive.
+- TARGET_RANGE stays inside the range or goes to review.
+- FIRST_AVAILABLE prioritizes nearest physical location, then earliest eligible session there.
+- Physical wins over virtual when eligible.
+- 130-mile maximum for physical training.
+- Seats are consumed during a run.
+- Prerequisites must be scheduled earlier.
+- Employee and contingent-worker Workday files are separate.
