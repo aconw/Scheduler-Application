@@ -50,13 +50,24 @@ def validate_report(label, raw, required, optional=None):
         return {'label':label,'ok':False,'detail':str(e),'rows':0}
 
 def workday_export(req, contingent=False):
+    """Create a Workday file with hard duplicate protection at person level."""
     template=ASSETS/('Enroll_In_Learning_Content_vContingent_Worker_ID.xlsx' if contingent else 'Enroll_In_Learning_Content_vEmployee.xlsx')
     wb=openpyxl.load_workbook(template); ws=wb['Enroll In Learning Content']
     rows=req[(req['Workday_Ready']=='Yes') & req['Selected_Session_WID'].astype(str).ne('')].copy()
     if contingent: rows=rows[rows['Worker_Type'].map(norm).eq('contingent worker')]
     else: rows=rows[~rows['Worker_Type'].map(norm).eq('contingent worker')]
+    if not rows.empty:
+        if 'Person_Key' not in rows.columns:
+            rows['Person_Key']=rows.apply(lambda r: f"WID:{r.get('WID')}" if clean(r.get('WID')) else f"EID:{r.get('Employee_ID')}",axis=1)
+        rows['_course_key']=rows['Training_Title'].map(norm)
+        rows['_session_key']=rows['Selected_Session_WID'].astype(str).str.strip()
+        # Defense in depth: one person/course and one person/session can appear only once.
+        rows=rows.sort_values(['Person_Key','Selected_Start','Event_Key'],na_position='last')
+        rows=rows.drop_duplicates(subset=['Person_Key','_course_key'],keep='first')
+        rows=rows.drop_duplicates(subset=['Person_Key','_session_key'],keep='first')
     for i,(_,r) in enumerate(rows.iterrows(),6):
-        ws.cell(i,1,f"{r['Event_Key']}-{i-5}"); ws.cell(i,2,str(r['Selected_Session_WID'])); ws.cell(i,3,str(r['Employee_ID'])); ws.cell(i,4,'Y'); ws.cell(i,5,None)
+        learner=clean(r.get('Current_Employee_ID')) or clean(r.get('Employee_ID'))
+        ws.cell(i,1,f"{r['Event_Key']}-{i-5}"); ws.cell(i,2,str(r['Selected_Session_WID'])); ws.cell(i,3,str(learner)); ws.cell(i,4,'Y'); ws.cell(i,5,None)
     bio=BytesIO(); wb.save(bio); return bio.getvalue(),len(rows)
 
 def audit_workbook(result):
@@ -79,6 +90,7 @@ def audit_workbook(result):
             'manual_scheduling_required':int((req['Disposition']=='MANUAL_SCHEDULING_REQUIRED').sum()),
             'previously_completed':int(req['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION']).sum()),
             'already_enrolled':int((req['Disposition']=='ALREADY_ENROLLED').sum()),
+            'satisfied_by_same_run_assignment':int((req['Disposition']=='SATISFIED_BY_SAME_RUN_ASSIGNMENT').sum()),
         }
     ])
     bio=BytesIO()
@@ -156,7 +168,7 @@ CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool', page_icon='📚', layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.3 • No approval step • Non-overlapping scheduling • Workday files + requirement audit')
+st.caption('Simplified stateless build v2.4 • Person-level deduplication • Non-overlapping scheduling • Workday files + requirement audit')
 
 if 'result' not in st.session_state: st.session_state.result=None
 if 'config_bytes' not in st.session_state: st.session_state.config_bytes=None
@@ -205,9 +217,9 @@ if st.button('Run Scheduling',type='primary',use_container_width=True,disabled=n
 if st.session_state.result is not None:
     result=st.session_state.result; req=result['requirements']; counts=req['Disposition'].value_counts().to_dict() if not req.empty and 'Disposition' in req else {}
     st.subheader('3. Results')
-    cols=st.columns(6); metrics=[('Requirements',len(req)),('Selected sessions',counts.get('PROPOSED_SCHEDULE',0)),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
+    cols=st.columns(7); metrics=[('Requirements',len(req)),('Selected sessions',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
     for col,(lab,val) in zip(cols,metrics): col.metric(lab,val)
-    display=['Worker_Name','Employee_ID','Event_Type','Training_Title','Disposition','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Conflict_Detail','Explanation']
+    display=['Worker_Name','Employee_ID','Event_Type','Training_Title','Disposition','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Explanation']
     st.dataframe(req[[c for c in display if c in req.columns]],use_container_width=True,height=440)
 
     pkg,emp_n,cw_n=results_zip(result)

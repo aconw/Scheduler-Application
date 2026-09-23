@@ -286,6 +286,20 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             'Work_Email':clean(r.get('Candidate Email')),'Home_Email':''})
     for ev in events: ev['Contingent_Action']=contingent_action(ev['Worker_Type'],ev['Traveler_Designation'])
 
+    # Durable person identity and current business identifier. WID is the preferred
+    # person key. If a person's Employee ID changes, use the ID from their most
+    # recent staffing event for Workday export while retaining each event's source ID.
+    latest_id_by_person={}
+    for ev in events:
+        pkey=_person_key(ev.get('WID'),ev.get('Employee_ID'))
+        stamp=ev.get('Anchor_Date') or datetime.min
+        prior=latest_id_by_person.get(pkey)
+        if prior is None or stamp >= prior[0]:
+            latest_id_by_person[pkey]=(stamp,id_norm(ev.get('Employee_ID')))
+    for ev in events:
+        ev['Person_Key']=_person_key(ev.get('WID'),ev.get('Employee_ID'))
+        ev['Current_Employee_ID']=latest_id_by_person.get(ev['Person_Key'],(None,id_norm(ev.get('Employee_ID'))))[1] or id_norm(ev.get('Employee_ID'))
+
     rule_rows=[]
     for _,r in rules_df.iterrows():
         title=clean(r.get('training_title'))
@@ -352,7 +366,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     reservations=[]
 
     for rec in reqs:
-        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
+        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         title_n=norm(rec['Training_Title']); person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
         satisfy_titles={title_n}|eq.get(title_n,set())
         completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfy_titles and norm(h.get('Record Completion Status'))=='completed']
@@ -386,6 +400,11 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
         if not p or p not in req_event[rec['Event_Key']]: memo[k]=0; return 0
         active.add(k); memo[k]=1+depth(req_event[rec['Event_Key']][p],memo,active); return memo[k]
 
+    # One enrollment per person + training course per scheduling run.
+    # Additional staffing events that require the same course remain in the audit,
+    # but they reference the first assignment instead of consuming another seat.
+    same_run_assignment={}
+
     for ev in sorted(events,key=lambda e:(e.get('Anchor_Date') or datetime.max,e['Event_Key'])):
         er=list(req_event.get(ev['Event_Key'],{}).values()); memo={}; er.sort(key=lambda r:(depth(r,memo),norm(r['Training_Title'])))
         for rec in er:
@@ -407,6 +426,34 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
                         pe=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering'))==prereq and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES and dt(o.get('Start Date'))]
                         if pe: prereq_bound=min(dt(o.get('Start Date')) for o in pe); rec['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'; rec['Prerequisite_Scheduled_Start']=prereq_bound
                         else: rec['Disposition']='REVIEW_REQUIRED'; rec['Prerequisite_Status']='PREREQUISITE_NOT_FOUND'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' has no prior completion or dated active enrollment."; continue
+
+            # If this person already received this course in this run, do not
+            # create a second enrollment. The existing assignment must still satisfy
+            # this staffing event's timing and prerequisite constraints; otherwise
+            # surface the second event for review rather than double-enroll the person.
+            pkey=_person_key(rec.get('WID'),rec.get('Employee_ID'))
+            course_key=(pkey,norm(rec['Training_Title']))
+            prior_assignment=same_run_assignment.get(course_key)
+            if prior_assignment is not None:
+                prior_start=dt(prior_assignment.get('Selected_Start'))
+                valid_for_event=bool(prior_start and (not rec.get('Anchor_Date') or prior_start >= rec['Anchor_Date']) and timing_ok(rec,prior_start))
+                if prereq_bound and prior_start:
+                    valid_for_event=valid_for_event and prior_start > prereq_bound
+                if valid_for_event:
+                    for fld in ('Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles'):
+                        rec[fld]=prior_assignment.get(fld,'')
+                    rec['Disposition']='SATISFIED_BY_SAME_RUN_ASSIGNMENT'
+                    rec['Workday_Ready']='No'
+                    rec['Satisfied_By_Event_Key']=prior_assignment.get('Event_Key','')
+                    rec['Satisfied_By_Session_WID']=prior_assignment.get('Selected_Session_WID','')
+                    rec['Explanation']=f"Same person/course was already assigned once in this run under staffing event {prior_assignment.get('Event_Key','')}; this requirement is satisfied by that single enrollment."
+                else:
+                    rec['Disposition']='REVIEW_REQUIRED'
+                    rec['Workday_Ready']='No'
+                    rec['Satisfied_By_Event_Key']=prior_assignment.get('Event_Key','')
+                    rec['Satisfied_By_Session_WID']=prior_assignment.get('Selected_Session_WID','')
+                    rec['Explanation']="This person already has the same course assigned once in this run, but that shared session does not satisfy this staffing event's timing/prerequisite rule. A second enrollment was not created."
+                continue
 
             all_s=sessions_by_title.get(norm(rec['Training_Title']),[])
             if not all_s: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='No session title matches this training requirement.'; continue
@@ -469,12 +516,13 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             chosen_st=dt(chosen.get('Start Date')); chosen_en=dt(chosen.get('End Date'))
             if chosen_st and chosen_en and chosen_en > chosen_st:
                 busy_by_person[pkey].append({'start':chosen_st,'end':chosen_en,'source':'SELECTED','title':rec['Training_Title'],'event_key':rec['Event_Key']})
-            reservations.append({'Session_Key':k,'Training_Title':rec['Training_Title'],'Start_Date':chosen.get('Start Date'),'End_Date':chosen.get('End Date'),'Location':clean(chosen.get('Locations')) or 'Virtual','Employee_ID':rec['Employee_ID'],'WID':rec['WID'],'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[k]})
+            same_run_assignment[(pkey,norm(rec['Training_Title']))]=rec
+            reservations.append({'Session_Key':k,'Training_Title':rec['Training_Title'],'Start_Date':chosen.get('Start Date'),'End_Date':chosen.get('End Date'),'Location':clean(chosen.get('Locations')) or 'Virtual','Employee_ID':rec['Employee_ID'],'WID':rec['WID'],'Person_Key':rec.get('Person_Key',pkey),'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[k]})
 
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
 
-    req_columns=['Event_Key','Event_Type','Employee_ID','WID','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     requirements_df=pd.DataFrame(reqs,columns=req_columns)
     return {'events':pd.DataFrame(events),'requirements':requirements_df,'sessions':pd.DataFrame(sessions),'seat_reservations':pd.DataFrame(reservations),'summary':dict(Counter(r['Disposition'] for r in reqs)),'source_counts':{'new_hires':len(new_hires),'job_changes':len(job_changes),'history':len(history),'sessions':len(sessions)},'warning':''}
 

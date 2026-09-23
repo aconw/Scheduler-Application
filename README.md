@@ -1,4 +1,4 @@
-# Class Scheduling Batch Tool — Simplified v2.3
+# Class Scheduling Batch Tool — Simplified v2.4
 
 This version is a stateless Streamlit batch scheduler. It does not use SQLite and it does not include an approve/deny workflow.
 
@@ -27,6 +27,11 @@ Then click **Run Scheduling** and download the export package.
   - `Run Summary`
 
 There is no approval sheet and no review workbook that must be uploaded back into the app.
+
+
+## Person-level duplicate prevention (v2.4)
+
+Every staffing event is still evaluated independently, but the same WID/person is enrolled in a given training course only once per run. Additional staffing events requiring that same course remain visible in the Requirement Audit as `SATISFIED_BY_SAME_RUN_ASSIGNMENT` and reference the enrollment that satisfies them. The Workday export also independently deduplicates by person + course and person + session.
 
 ## Non-overlap rule
 
@@ -73,6 +78,6 @@ You can download/edit/re-upload this workbook from the app. No server-side datab
 Email drafts can be downloaded directly after scheduling. They are `.eml` drafts only; the app does not send messages automatically.
 
 
-## v2.3 startup simplification
+## v2.4 startup simplification
 
 `batch_utils.py` has been removed. All upload validation, export-package creation, and email-draft helpers now live directly in `app.py`, preventing mixed-version import errors.
