@@ -349,11 +349,42 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             'Training_Title':title,'Prerequisite':clean(r.get('prerequisite')),'Topic':clean(r.get('topic')),'Scheduling_Policy':clean(r.get('scheduling_policy')),
             'Timing_Modifier':clean(r.get('timing_modifier')),'Timing_Min':r.get('timing_min'),'Timing_Max':r.get('timing_max')})
 
+    # Equivalency relationships are directional unless explicitly marked TWO_WAY.
+    # ONE_WAY semantics: equivalent_training_title satisfies required_training_title.
+    # TWO_WAY semantics: either configured title satisfies the other.
     eq=defaultdict(set)
+    eq_meta={}
     if equivalencies_df is not None and not equivalencies_df.empty:
         for _,r in equivalencies_df.iterrows():
-            req=norm(r.get('required_training_title')); equiv=norm(r.get('equivalent_training_title'))
-            if req and equiv: eq[req].add(equiv)
+            req_raw=clean(r.get('required_training_title')); equiv_raw=clean(r.get('equivalent_training_title'))
+            req=norm(req_raw); equiv=norm(equiv_raw)
+            direction=norm(r.get('relationship_direction') or 'ONE_WAY').replace('-','_').replace(' ','_')
+            if direction in ('1_way','oneway'): direction='one_way'
+            if direction in ('2_way','twoway'): direction='two_way'
+            if direction not in ('one_way','two_way'): direction='one_way'
+            if req and equiv:
+                eq[req].add(equiv)
+                eq_meta[(req,equiv)]={
+                    'direction':'ONE_WAY' if direction=='one_way' else 'TWO_WAY',
+                    'configured_required':req_raw,'configured_equivalent':equiv_raw,
+                    'match_direction':'FORWARD'
+                }
+                if direction=='two_way':
+                    eq[equiv].add(req)
+                    eq_meta[(equiv,req)]={
+                        'direction':'TWO_WAY',
+                        'configured_required':req_raw,'configured_equivalent':equiv_raw,
+                        'match_direction':'REVERSE'
+                    }
+
+    def satisfaction_titles(required_title):
+        key=norm(required_title)
+        return {key} | set(eq.get(key,set()))
+
+    def equivalency_match(required_title, observed_title):
+        rk=norm(required_title); ok=norm(observed_title)
+        if not rk or not ok or rk==ok: return None
+        return eq_meta.get((rk,ok))
 
     hist_by_wid=defaultdict(list); hist_by_eid=defaultdict(list)
     for h in history:
@@ -407,23 +438,52 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     reservations=[]
 
     for rec in reqs:
-        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
+        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Existing_Enrollment_Training':'','Equivalency_Used':'','Equivalency_Direction':'','Equivalency_Match_Direction':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         title_n=norm(rec['Training_Title']); person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
-        satisfy_titles={title_n}|eq.get(title_n,set())
+        satisfy_titles=satisfaction_titles(rec['Training_Title'])
         completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfy_titles and norm(h.get('Record Completion Status'))=='completed']
         if completed:
             latest=max(completed,key=lambda h:dt(h.get('Record Completion Date')) or datetime.min)
-            rec['Disposition']='PREVIOUSLY_COMPLETED' if norm(latest.get('Record Learning Content'))==title_n else 'EQUIVALENT_COMPLETION'
-            rec['Completion_Date']=latest.get('Record Completion Date'); rec['Completion_Training']=clean(latest.get('Record Learning Content'))
-            rec['Explanation']='Historical completion satisfies requirement. No reassignment required.'; continue
-        existing=[h for h in person_hist if norm(h.get('Record Learning Content'))==title_n and norm(h.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
-        orient_existing=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering'))==title_n and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
+            observed=clean(latest.get('Record Learning Content'))
+            em=equivalency_match(rec['Training_Title'],observed)
+            rec['Disposition']='PREVIOUSLY_COMPLETED' if norm(observed)==title_n else 'EQUIVALENT_COMPLETION'
+            rec['Completion_Date']=latest.get('Record Completion Date'); rec['Completion_Training']=observed
+            if em:
+                rec['Equivalency_Used']=f"{em['configured_equivalent']} -> {em['configured_required']}" if em['match_direction']=='FORWARD' else f"{em['configured_required']} <-> {em['configured_equivalent']}"
+                rec['Equivalency_Direction']=em['direction']; rec['Equivalency_Match_Direction']=em['match_direction']
+                rec['Explanation']=f"Historical completion of equivalent training '{observed}' satisfies required training '{rec['Training_Title']}' via {em['direction']} equivalency. No reassignment required."
+            else:
+                rec['Explanation']='Historical completion satisfies requirement. No reassignment required.'
+            continue
+
+        # Existing enrollment suppression uses the same equivalency relationships as completion suppression.
+        existing=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfy_titles and norm(h.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
+        orient_existing=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering')) in satisfy_titles and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
         if existing or orient_existing:
             starts=[dt(o.get('Start Date')) for o in orient_existing if dt(o.get('Start Date'))]
             if starts: rec['Existing_Session_Start']=min(starts)
             dates=[dt(h.get("Learner's Registration Date")) for h in existing if dt(h.get("Learner's Registration Date"))]
             if dates: rec['Existing_Registration_Date']=max(dates)
-            rec['Disposition']='ALREADY_ENROLLED'; rec['Explanation']='Existing active registration found. Duplicate enrollment suppressed.'; continue
+            # Prefer a dated orientation enrollment for the audit; otherwise use the most recent transcript registration.
+            observed=''
+            if orient_existing:
+                dated=[o for o in orient_existing if dt(o.get('Start Date'))]
+                chosen=min(dated,key=lambda o:dt(o.get('Start Date'))) if dated else orient_existing[0]
+                observed=clean(chosen.get('Enrolled Course Offering'))
+            elif existing:
+                dated=[h for h in existing if dt(h.get("Learner's Registration Date"))]
+                chosen=max(dated,key=lambda h:dt(h.get("Learner's Registration Date"))) if dated else existing[0]
+                observed=clean(chosen.get('Record Learning Content'))
+            rec['Existing_Enrollment_Training']=observed
+            em=equivalency_match(rec['Training_Title'],observed)
+            rec['Disposition']='ALREADY_ENROLLED'
+            if em:
+                rec['Equivalency_Used']=f"{em['configured_equivalent']} -> {em['configured_required']}" if em['match_direction']=='FORWARD' else f"{em['configured_required']} <-> {em['configured_equivalent']}"
+                rec['Equivalency_Direction']=em['direction']; rec['Equivalency_Match_Direction']=em['match_direction']
+                rec['Explanation']=f"Existing active enrollment in equivalent training '{observed}' satisfies required training '{rec['Training_Title']}' via {em['direction']} equivalency. Duplicate enrollment suppressed."
+            else:
+                rec['Explanation']='Existing active registration found. Duplicate enrollment suppressed.'
+            continue
         if norm(rec['Contingent_Action'])=='escalate': rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Contingent worker policy requires escalation.'; continue
         pol=norm(rec['Scheduling_Policy'])
         if pol=='flag_manual': rec['Disposition']='MANUAL_SCHEDULING_REQUIRED'; rec['Explanation']='Training rule uses FLAG_MANUAL.'; continue
@@ -461,12 +521,13 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
                     else: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' is not in a schedulable state/date ({pr['Disposition']})."; continue
                 else:
                     person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
-                    ph=[h for h in person_hist if norm(h.get('Record Learning Content'))==prereq and norm(h.get('Record Completion Status'))=='completed']
+                    prereq_titles=satisfaction_titles(rec.get('Prerequisite'))
+                    ph=[h for h in person_hist if norm(h.get('Record Learning Content')) in prereq_titles and norm(h.get('Record Completion Status'))=='completed']
                     if ph: rec['Prerequisite_Status']='SATISFIED_BY_PRIOR_COMPLETION'
                     else:
-                        pe=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering'))==prereq and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES and dt(o.get('Start Date'))]
+                        pe=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering')) in prereq_titles and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES and dt(o.get('Start Date'))]
                         if pe: prereq_bound=min(dt(o.get('Start Date')) for o in pe); rec['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'; rec['Prerequisite_Scheduled_Start']=prereq_bound
-                        else: rec['Disposition']='REVIEW_REQUIRED'; rec['Prerequisite_Status']='PREREQUISITE_NOT_FOUND'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' has no prior completion or dated active enrollment."; continue
+                        else: rec['Disposition']='REVIEW_REQUIRED'; rec['Prerequisite_Status']='PREREQUISITE_NOT_FOUND'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' has no prior completion or dated active enrollment (including configured equivalents)."; continue
 
             # If this person already received this course in this run, do not
             # create a second enrollment. The existing assignment must still satisfy
@@ -563,7 +624,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
 
-    req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     requirements_df=pd.DataFrame(reqs,columns=req_columns)
     return {
         'events':pd.DataFrame(events),

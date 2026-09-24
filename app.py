@@ -38,6 +38,16 @@ def config_frames(source_bytes=None):
     if missing: raise ValueError(f'Configuration workbook is missing sheets: {missing}')
     rules=_active(sheets['Training Rules']); locations=sheets['Locations'].copy(); eq=_active(sheets['Equivalencies']); routing=_active(sheets['Manual Routing'])
     rules=rules.where(pd.notna(rules),''); locations=locations.where(pd.notna(locations),''); eq=eq.where(pd.notna(eq),''); routing=routing.where(pd.notna(routing),'')
+    # Backward compatibility: older configuration files had no direction column.
+    # Blank/missing direction is intentionally treated as ONE_WAY.
+    if 'relationship_direction' not in eq.columns:
+        eq['relationship_direction']='ONE_WAY'
+    else:
+        eq['relationship_direction']=eq['relationship_direction'].replace('', 'ONE_WAY')
+    allowed={'ONE_WAY','TWO_WAY','1-WAY','2-WAY','1_WAY','2_WAY','ONE WAY','TWO WAY'}
+    invalid=eq.loc[~eq['relationship_direction'].astype(str).str.strip().str.upper().isin(allowed),'relationship_direction']
+    if not invalid.empty:
+        raise ValueError(f"Equivalencies contains invalid relationship_direction value(s): {sorted(set(invalid.astype(str)))}. Use ONE_WAY or TWO_WAY.")
     return rules,locations,eq,routing
 
 def validate_report(label, raw, required, optional=None):
@@ -171,13 +181,13 @@ CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool', page_icon='📚', layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.5 • Duplicate source-event collapse • Person-level deduplication • Non-overlapping scheduling')
+st.caption('Simplified stateless build v2.6 • Directional equivalencies for completions + active enrollments • Duplicate source-event collapse • Non-overlapping scheduling')
 
 if 'result' not in st.session_state: st.session_state.result=None
 if 'config_bytes' not in st.session_state: st.session_state.config_bytes=None
 
 with st.expander('Configuration',expanded=False):
-    st.write('The bundled configuration contains the current training rules and location master. Upload an edited configuration workbook only when you want to use changed rules, equivalencies, locations, or manual-message routing.')
+    st.write('The bundled configuration contains the current training rules and location master. Upload an edited configuration workbook only when you want to use changed rules, equivalencies, locations, or manual-message routing. Equivalencies support ONE_WAY and TWO_WAY relationships and apply to both historical completions and active enrollments.')
     conf=st.file_uploader('Optional Scheduler_Configuration.xlsx',type=['xlsx'],key='config_upload')
     if conf is not None: st.session_state.config_bytes=raw_bytes(conf)
     st.download_button('Download Current Configuration Workbook',CONFIG_DEFAULT.read_bytes(),'Scheduler_Configuration.xlsx',mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

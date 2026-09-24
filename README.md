@@ -1,8 +1,36 @@
-# Class Scheduling Batch Tool — Simplified v2.5
+# Class Scheduling Batch Tool — Simplified v2.6
 
 This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-## Important v2.5 behavior
+## Important v2.6 behavior
+
+v2.6 makes the **Equivalencies** worksheet authoritative for both:
+
+- historical completion suppression; and
+- current / active enrollment suppression.
+
+Each equivalency row can be `ONE_WAY` or `TWO_WAY`.
+
+### Direction semantics
+
+The Equivalencies worksheet uses these columns:
+
+| required_training_title | equivalent_training_title | relationship_direction | active |
+|---|---|---|---|
+
+- `ONE_WAY`: `equivalent_training_title` satisfies `required_training_title`, but not the reverse.
+- `TWO_WAY`: either title satisfies the other.
+- Blank/missing direction in an older configuration workbook defaults to `ONE_WAY`.
+
+Example already included in the bundled configuration:
+
+`Cardiac Monitoring Blended Learning Session 1 - Sinus, Atrial & Junctional Rhythms` ↔ `Cardiac Monitoring` = `TWO_WAY`
+
+This means an employee already enrolled in either class will not be assigned the other, and historical completion of either class can satisfy the other.
+
+Equivalencies are direct mappings only; the application does not infer additional transitive relationships through chains of equivalencies.
+
+## Duplicate staffing-event protection retained
 
 Before training requirements are generated, the scheduler collapses duplicate source staffing events for the same person when event type, hire/effective date, job/position context, cost center, supervisory organization, physical location, worker type, and traveler designation are identical.
 
@@ -15,7 +43,7 @@ Upload for each run:
 - New Hire Orientation Report and/or New / Additional Job Change Report
 - Training History / Learning Transcript
 - Learning Content / Available Sessions
-- Existing Orientation Schedule (required for overlap prevention)
+- Existing Orientation Schedule (required for overlap prevention and existing-enrollment suppression)
 
 Then click **Run Scheduling** and download the export package.
 
@@ -33,6 +61,8 @@ Then click **Run Scheduling** and download the export package.
   - Duplicate Source Events
   - Run Summary
 
+The Requirement Audit includes fields showing the observed completion/enrollment title, equivalency used, direction, and whether a two-way relationship was matched in the forward or reverse direction.
+
 ## Scheduling protections
 
 - Candidate Position ID is Job Code for new hires.
@@ -40,7 +70,7 @@ Then click **Run Scheduling** and download the export package.
 - Duplicate source staffing events are collapsed before requirement generation.
 - General and supervisory-organization-specific requirements are additive.
 - Historical completion permanently satisfies a requirement.
-- Configured equivalent historical courses may satisfy a current requirement.
+- Configured equivalents apply to both historical completions and active enrollments.
 - Existing active enrollment suppresses duplicate registration.
 - A person/course is selected only once in a run.
 - A person/session is selected only once in a run.
@@ -52,6 +82,7 @@ Then click **Run Scheduling** and download the export package.
 - FIRST_AVAILABLE chooses the earliest eligible session at the nearest eligible location.
 - Seats are consumed inside the run to prevent double assignment.
 - Prerequisites must occur earlier and may be chained.
+- Configured equivalencies are also considered when checking an external prerequisite completion/enrollment.
 - FLAG_MANUAL remains a manual-scheduling disposition.
 
 ## Configuration
