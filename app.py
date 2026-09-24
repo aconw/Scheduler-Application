@@ -84,6 +84,7 @@ def audit_workbook(result):
     """Operational workbook. No application approval step is required."""
     req=result['requirements'].copy(); seat=result['seat_reservations'].copy()
     duplicate_events=result.get('duplicate_events',pd.DataFrame()).copy()
+    existing_workday=result.get('existing_workday',pd.DataFrame()).copy()
     selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy()
     selected_cols=[
         'Event_Key','Worker_Name','Employee_ID','WID','Worker_Type','Event_Type','Anchor_Date','Position_Title','Job_Code',
@@ -112,6 +113,7 @@ def audit_workbook(result):
         review.to_excel(xw,index=False,sheet_name='Review Queue')
         seat.to_excel(xw,index=False,sheet_name='Seat Audit')
         duplicate_events.to_excel(xw,index=False,sheet_name='Duplicate Source Events')
+        existing_workday.to_excel(xw,index=False,sheet_name='Existing Workday Training')
         summary.to_excel(xw,index=False,sheet_name='Run Summary')
     bio.seek(0); wb=openpyxl.load_workbook(bio)
     from openpyxl.styles import Font,PatternFill,Alignment
@@ -140,7 +142,7 @@ def results_zip(result):
         if cw_n: zipf.writestr('Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx',cw)
         zipf.writestr('README.txt',
             f'Generated {datetime.now():%Y-%m-%d %H:%M}. Employee Workday rows: {emp_n}. Contingent Worker rows: {cw_n}.\n'
-            'Scheduling_Results_and_Audit.xlsx contains Selected Sessions, Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, and Run Summary.\n'
+            'Scheduling_Results_and_Audit.xlsx contains Selected Sessions, Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, Existing Workday Training, and Run Summary.\n'
             'The files in the Workday folder retain the supplied Workday upload format.\n')
     return z.getvalue(),emp_n,cw_n
 
@@ -181,7 +183,7 @@ CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool', page_icon='📚', layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.6 • Directional equivalencies for completions + active enrollments • Duplicate source-event collapse • Non-overlapping scheduling')
+st.caption('Simplified stateless build v2.7 • Equivalencies for completions + active enrollments • All existing Workday training shown • Non-overlapping scheduling')
 
 if 'result' not in st.session_state: st.session_state.result=None
 if 'config_bytes' not in st.session_state: st.session_state.config_bytes=None
@@ -233,10 +235,18 @@ if st.session_state.result is not None:
     dup_count=len(result.get('duplicate_events',pd.DataFrame()))
     if dup_count:
         st.info(f'{dup_count} duplicate source staffing event(s) were collapsed before training requirements were generated. See Duplicate Source Events in the audit workbook.')
+    existing=result.get('existing_workday',pd.DataFrame())
     cols=st.columns(8); metrics=[('Requirements',len(req)),('Selected sessions',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Duplicate events collapsed',dup_count),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
     for col,(lab,val) in zip(cols,metrics): col.metric(lab,val)
-    display=['Worker_Name','Employee_ID','Event_Type','Training_Title','Disposition','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Explanation']
+    display=['Worker_Name','Employee_ID','Event_Type','Training_Title','Disposition','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Existing_Enrollment_Training','Equivalency_Used','Explanation']
     st.dataframe(req[[c for c in display if c in req.columns]],use_container_width=True,height=440)
+
+    st.markdown('### Existing Workday Training')
+    st.caption('Every active enrollment found on the Orientation Schedule report is shown, whether or not it is required for the employee’s current role. These sessions also block overlapping newly selected training.')
+    if existing is not None and not existing.empty:
+        st.dataframe(existing[['Employee_ID','WID','Training_Title','Course_Offering','Registration_Status','Start_Date','End_Date','Location','Required_For_Current_Role','Scheduling_Impact']],use_container_width=True,height=320)
+    else:
+        st.info('No active/upcoming existing Workday training sessions were found for the uploaded population.')
 
     pkg,emp_n,cw_n=results_zip(result)
     st.subheader('4. Export')

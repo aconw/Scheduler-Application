@@ -397,6 +397,11 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     for s in sessions:
         if clean(s.get('Title')): sessions_by_title[norm(s.get('Title'))].append(s)
 
+    # Session-level view of active/upcoming existing Workday enrollments. The source
+    # is lesson-level, so duplicate lesson rows for the same person/session are collapsed.
+    existing_workday_rows=[]
+    existing_seen=set()
+
     # Employee time constraints. Existing scheduled/enrolled classes are blocked before
     # any new selections are made. New selections are added as the run proceeds, so
     # one employee can never receive two overlapping sessions, even across staffing events.
@@ -414,9 +419,19 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
         if not st or not en or en <= st:
             continue
         eid=id_norm(o.get('Employee ID')); pkey=_person_key(eid_to_wid.get(eid,''),eid)
+        title=clean(o.get('Enrolled Course Offering'))
+        okey=(pkey,norm(title),st.isoformat(),en.isoformat())
+        if okey not in existing_seen:
+            existing_seen.add(okey)
+            existing_workday_rows.append({
+                'Person_Key':pkey,'WID':eid_to_wid.get(eid,''),'Employee_ID':eid,
+                'Training_Title':title,'Registration_Status':clean(o.get('Registration Status')),
+                'Start_Date':st,'End_Date':en,'Location':clean(o.get('Locations') or o.get('Training Room') or ''),
+                'Course_Offering':title,
+            })
         busy_by_person[pkey].append({
             'start':st,'end':en,'source':'EXISTING_SCHEDULE',
-            'title':clean(o.get('Enrolled Course Offering')),'event_key':'',
+            'title':title,'event_key':'',
         })
 
     reqs=[]; seen=set()
@@ -428,6 +443,13 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             key=(ev['Event_Key'],norm(rr['Training_Title']))
             if key in seen: continue
             seen.add(key); reqs.append({**ev,**rr})
+
+    person_req_titles=defaultdict(set)
+    for r in reqs:
+        person_req_titles[_person_key(r.get('WID'),r.get('Employee_ID'))] |= satisfaction_titles(r['Training_Title'])
+    for ew in existing_workday_rows:
+        ew['Required_For_Current_Role']='Yes' if norm(ew['Training_Title']) in person_req_titles.get(ew['Person_Key'],set()) else 'No'
+        ew['Scheduling_Impact']='BLOCKS_OVERLAP_CHECK'
 
     def skey(s): return id_norm(s.get('WID')) or f"{clean(s.get('Reference ID'))}|{clean(s.get('Start Date'))}|{norm(s.get('Title'))}"
     opening={}; remaining={}
@@ -629,6 +651,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     return {
         'events':pd.DataFrame(events),
         'duplicate_events':pd.DataFrame(duplicate_events),
+        'existing_workday':pd.DataFrame(existing_workday_rows, columns=['Person_Key','WID','Employee_ID','Training_Title','Registration_Status','Start_Date','End_Date','Location','Course_Offering','Required_For_Current_Role','Scheduling_Impact']),
         'requirements':requirements_df,
         'sessions':pd.DataFrame(sessions),
         'seat_reservations':pd.DataFrame(reservations),

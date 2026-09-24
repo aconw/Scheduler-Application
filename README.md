@@ -1,10 +1,10 @@
-# Class Scheduling Batch Tool — Simplified v2.6
+# Class Scheduling Batch Tool — Simplified v2.7
 
 This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-## Important v2.6 behavior
+## Important v2.7 behavior
 
-v2.6 makes the **Equivalencies** worksheet authoritative for both:
+v2.7 makes the **Equivalencies** worksheet authoritative for both:
 
 - historical completion suppression; and
 - current / active enrollment suppression.
@@ -95,3 +95,11 @@ The Requirement Audit includes fields showing the observed completion/enrollment
 - Manual Routing
 
 The configuration workbook may be downloaded, edited, and uploaded back into the app. No server-side database is required.
+
+## v2.7 change: existing Workday training
+The Orientation Schedule report is used for two purposes:
+
+1. It blocks new selections that overlap an active existing enrollment.
+2. The app shows every active enrollment found for the uploaded population in the results and in the `Existing Workday Training` audit sheet, even when that training is not required for the current role.
+
+The source report is lesson-level; duplicate lesson rows for the same person/course offering/start/end are collapsed to one session-level row for display.
