@@ -88,8 +88,8 @@ def audit_workbook(result):
     selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy()
     selected_cols=[
         'Event_Key','Worker_Name','Employee_ID','WID','Worker_Type','Event_Type','Anchor_Date','Position_Title','Job_Code',
-        'Cost_Center_ID','Cost_Center_Title','Training_Title','Disposition','Selected_Session_WID','Selected_Reference_ID','Selected_Start',
-        'Selected_End','Selected_Location','Distance_Miles','Scheduling_Policy','Prerequisite','Prerequisite_Status','Explanation'
+        'Cost_Center_ID','Cost_Center_Title','Training_Title','Priority','Disposition','Selected_Session_WID','Selected_Reference_ID','Selected_Start',
+        'Selected_End','Selected_Location','Distance_Miles','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Selection_Order','Selection_Phase','Scheduling_Policy','Prerequisite','Prerequisite_Status','Explanation'
     ]
     selected=selected[[c for c in selected_cols if c in selected.columns]]
     review=req[req['Disposition'].isin(['REVIEW_REQUIRED','MANUAL_SCHEDULING_REQUIRED'])].copy()
@@ -183,7 +183,7 @@ CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool', page_icon='📚', layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.7 • Equivalencies for completions + active enrollments • All existing Workday training shown • Non-overlapping scheduling')
+st.caption('Simplified stateless build v2.8 • TARGET_RANGE first • FIRST_AVAILABLE priority • Multi-day sessions • Non-overlapping scheduling')
 
 if 'result' not in st.session_state: st.session_state.result=None
 if 'config_bytes' not in st.session_state: st.session_state.config_bytes=None
@@ -242,7 +242,7 @@ if st.session_state.result is not None:
     st.dataframe(req[[c for c in display if c in req.columns]],use_container_width=True,height=440)
 
     st.markdown('### Existing Workday Training')
-    st.caption('Every active enrollment found on the Orientation Schedule report is shown, whether or not it is required for the employee’s current role. These sessions also block overlapping newly selected training.')
+    st.caption('Scheduling order: TARGET_RANGE requirements are processed before FIRST_AVAILABLE. When FIRST_AVAILABLE classes compete at the same date/time, lower Priority number is selected first. Multi-day offerings are grouped by session WID and all days block conflicts. Existing Workday training also blocks conflicts.')
     if existing is not None and not existing.empty:
         st.dataframe(existing[['Employee_ID','WID','Training_Title','Course_Offering','Registration_Status','Start_Date','End_Date','Location','Required_For_Current_Role','Scheduling_Impact']],use_container_width=True,height=320)
     else:

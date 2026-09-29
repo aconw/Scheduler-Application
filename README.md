@@ -103,3 +103,9 @@ The Orientation Schedule report is used for two purposes:
 2. The app shows every active enrollment found for the uploaded population in the results and in the `Existing Workday Training` audit sheet, even when that training is not required for the current role.
 
 The source report is lesson-level; duplicate lesson rows for the same person/course offering/start/end are collapsed to one session-level row for display.
+
+## v2.8 scheduling order
+
+The scheduler uses the following order within each canonical staffing event: TARGET_RANGE requirements first, then FIRST_AVAILABLE requirements. Prerequisite dependencies can override that phase when a prerequisite must be scheduled first. For FIRST_AVAILABLE requirements, the earliest feasible start is evaluated first; when two different FIRST_AVAILABLE requirements compete for the same start date/time, lower numeric Priority wins (1 is higher than 2; blank is lowest).
+
+Multi-day Available Sessions are grouped by WID. One seat is consumed for the offering and all daily lesson intervals are considered for employee conflict prevention.

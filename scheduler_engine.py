@@ -347,7 +347,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
         if not title: continue
         rule_rows.append({'Rule_ID':r.get('id'),'Job_Code':clean(r.get('job_code')),'Cost_Center':clean(r.get('cost_center')),'Sup_Org':clean(r.get('supervisory_org')),
             'Training_Title':title,'Prerequisite':clean(r.get('prerequisite')),'Topic':clean(r.get('topic')),'Scheduling_Policy':clean(r.get('scheduling_policy')),
-            'Timing_Modifier':clean(r.get('timing_modifier')),'Timing_Min':r.get('timing_min'),'Timing_Max':r.get('timing_max')})
+            'Timing_Modifier':clean(r.get('timing_modifier')),'Timing_Min':r.get('timing_min'),'Timing_Max':r.get('timing_max'),'Priority':r.get('priority')})
 
     # Equivalency relationships are directional unless explicitly marked TWO_WAY.
     # ONE_WAY semantics: equivalent_training_title satisfies required_training_title.
@@ -393,46 +393,78 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
     orient_by_eid=defaultdict(list)
     for o in orientation:
         if id_norm(o.get('Employee ID')): orient_by_eid[id_norm(o.get('Employee ID'))].append(o)
-    sessions_by_title=defaultdict(list)
-    for s in sessions:
-        if clean(s.get('Title')): sessions_by_title[norm(s.get('Title'))].append(s)
+    # Available Sessions is lesson-level. A single course offering/session can have
+    # multiple rows/days, and all of those rows share the same WID. Group by WID so
+    # one enrollment consumes one seat and all daily intervals participate in conflict checks.
+    def skey(s):
+        return id_norm(s.get('WID')) or f"{clean(s.get('Reference ID'))}|{clean(s.get('Start Date'))}|{norm(s.get('Title'))}"
 
-    # Session-level view of active/upcoming existing Workday enrollments. The source
-    # is lesson-level, so duplicate lesson rows for the same person/session are collapsed.
+    # Rebuild grouping with the finalized key function.
+    session_groups=defaultdict(list)
+    for s in sessions:
+        if clean(s.get('Title')):
+            session_groups[skey(s)].append(s)
+
+    session_offerings=[]
+    sessions_by_title=defaultdict(list)
+    for key, group in session_groups.items():
+        group_sorted=sorted(group,key=lambda x: dt(x.get('Start Date')) or datetime.max)
+        intervals=[]
+        for row in group_sorted:
+            st=dt(row.get('Start Date')); en=dt(row.get('End Date'))
+            if st and en and en>st:
+                intervals.append((st,en))
+        if not intervals: continue
+        titles={clean(r.get('Title')) for r in group_sorted if clean(r.get('Title'))}
+        title=next(iter(titles)) if len(titles)==1 else clean(group_sorted[0].get('Title'))
+        locations=[clean(r.get('Locations')) for r in group_sorted if clean(r.get('Locations'))]
+        location=locations[0] if locations else ''
+        location_set={norm(x) for x in locations if x}
+        refs=[clean(r.get('Reference ID')) for r in group_sorted if clean(r.get('Reference ID'))]
+        statuses={norm(r.get('Availability Status')) for r in group_sorted}
+        try: seats=max([0]+[int(float(r.get('Available Seats') or 0)) for r in group_sorted])
+        except Exception: seats=0
+        offering={
+            'Session_Key':key,'WID':id_norm(group_sorted[0].get('WID')),'Reference_ID':refs[0] if refs else '',
+            'Title':title,'Availability_Status': 'Open' if statuses and statuses.issubset({'open'}) else (group_sorted[0].get('Availability Status') or ''),
+            'Available_Seats':seats,'Location':location,'Location_Consistent':len(location_set)<=1,
+            'Intervals':intervals,'First_Start':min(st for st,en in intervals),'Last_End':max(en for st,en in intervals),
+            'Day_Count':len(intervals),'Multi_Day':len({st.date() for st,en in intervals})>1
+        }
+        session_offerings.append(offering)
+        sessions_by_title[norm(title)].append(offering)
+
+    # Session capacity is offering-level; each multi-day offering shares one seat balance.
+    opening={o['Session_Key']:o['Available_Seats'] for o in session_offerings}
+    remaining=dict(opening)
+    reservations=[]
+
+    # Existing Workday training: the lesson-level report is retained for display,
+    # while its daily intervals block the employee's calendar.
+
     existing_workday_rows=[]
     existing_seen=set()
+    busy_by_person=defaultdict(list)
 
-    # Employee time constraints. Existing scheduled/enrolled classes are blocked before
-    # any new selections are made. New selections are added as the run proceeds, so
-    # one employee can never receive two overlapping sessions, even across staffing events.
     eid_to_wid={}
     for ev in events:
-        if ev.get('Employee_ID') and ev.get('WID'):
-            eid_to_wid[id_norm(ev['Employee_ID'])]=id_norm(ev['WID'])
+        if ev.get('Employee_ID') and ev.get('WID'): eid_to_wid[id_norm(ev['Employee_ID'])]=id_norm(ev['WID'])
     for eid,wid in emp_to_hist_wid.items():
         if eid and wid: eid_to_wid[id_norm(eid)]=id_norm(wid)
-    busy_by_person=defaultdict(list)
+
     for o in orientation:
-        if norm(o.get('Registration Status')) not in ACTIVE_REGISTRATION_STATUSES:
-            continue
+        if norm(o.get('Registration Status')) not in ACTIVE_REGISTRATION_STATUSES: continue
         st=dt(o.get('Start Date')); en=dt(o.get('End Date'))
-        if not st or not en or en <= st:
-            continue
+        if not st or not en or en<=st: continue
         eid=id_norm(o.get('Employee ID')); pkey=_person_key(eid_to_wid.get(eid,''),eid)
         title=clean(o.get('Enrolled Course Offering'))
         okey=(pkey,norm(title),st.isoformat(),en.isoformat())
         if okey not in existing_seen:
             existing_seen.add(okey)
-            existing_workday_rows.append({
-                'Person_Key':pkey,'WID':eid_to_wid.get(eid,''),'Employee_ID':eid,
-                'Training_Title':title,'Registration_Status':clean(o.get('Registration Status')),
-                'Start_Date':st,'End_Date':en,'Location':clean(o.get('Locations') or o.get('Training Room') or ''),
-                'Course_Offering':title,
-            })
-        busy_by_person[pkey].append({
-            'start':st,'end':en,'source':'EXISTING_SCHEDULE',
-            'title':title,'event_key':'',
-        })
+            existing_workday_rows.append({'Person_Key':pkey,'WID':eid_to_wid.get(eid,''),'Employee_ID':eid,'Training_Title':title,
+                'Registration_Status':clean(o.get('Registration Status')),'Start_Date':st,'End_Date':en,
+                'Location':clean(o.get('Locations') or o.get('Training Room') or ''),'Course_Offering':title})
+        busy_by_person[pkey].append({'start':st,'end':en,'source':'EXISTING_SCHEDULE','title':title,'event_key':''})
 
     reqs=[]; seen=set()
     for ev in events:
@@ -445,22 +477,12 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
             seen.add(key); reqs.append({**ev,**rr})
 
     person_req_titles=defaultdict(set)
-    for r in reqs:
-        person_req_titles[_person_key(r.get('WID'),r.get('Employee_ID'))] |= satisfaction_titles(r['Training_Title'])
+    for r in reqs: person_req_titles[_person_key(r.get('WID'),r.get('Employee_ID'))] |= satisfaction_titles(r['Training_Title'])
     for ew in existing_workday_rows:
         ew['Required_For_Current_Role']='Yes' if norm(ew['Training_Title']) in person_req_titles.get(ew['Person_Key'],set()) else 'No'
         ew['Scheduling_Impact']='BLOCKS_OVERLAP_CHECK'
-
-    def skey(s): return id_norm(s.get('WID')) or f"{clean(s.get('Reference ID'))}|{clean(s.get('Start Date'))}|{norm(s.get('Title'))}"
-    opening={}; remaining={}
-    for s in sessions:
-        try: seats=max(0,int(float(s.get('Available Seats') or 0)))
-        except Exception: seats=0
-        k=skey(s); opening[k]=max(opening.get(k,0),seats); remaining[k]=opening[k]
-    reservations=[]
-
     for rec in reqs:
-        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Existing_Enrollment_Training':'','Equivalency_Used':'','Equivalency_Direction':'','Equivalency_Match_Direction':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
+        rec.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Existing_Enrollment_Training':'','Equivalency_Used':'','Equivalency_Direction':'','Equivalency_Match_Direction':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Selected_Day_Count':'','Selected_Multi_Day':'','Selected_Session_Days':'','Selection_Order':'','Selection_Phase':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         title_n=norm(rec['Training_Title']); person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
         satisfy_titles=satisfaction_titles(rec['Training_Title'])
         completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfy_titles and norm(h.get('Record Completion Status'))=='completed']
@@ -514,6 +536,7 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
 
     req_event=defaultdict(dict)
     for r in reqs: req_event[r['Event_Key']][norm(r['Training_Title'])]=r
+
     def depth(rec,memo,active=None):
         k=norm(rec['Training_Title'])
         if k in memo: return memo[k]
@@ -523,130 +546,200 @@ def run_scheduler(new_hire_file, job_change_file, history_file, sessions_file, r
         if not p or p not in req_event[rec['Event_Key']]: memo[k]=0; return 0
         active.add(k); memo[k]=1+depth(req_event[rec['Event_Key']][p],memo,active); return memo[k]
 
-    # One enrollment per person + training course per scheduling run.
-    # Additional staffing events that require the same course remain in the audit,
-    # but they reference the first assignment instead of consuming another seat.
     same_run_assignment={}
+    selection_counter=0
 
+    def priority_value(rec):
+        v=rec.get('Priority')
+        try: return float(v) if v not in (None,'') else float('inf')
+        except Exception: return float('inf')
+
+    def group_intervals(offering):
+        return offering['Intervals']
+
+    def offering_conflicts(pkey, offering):
+        conflicts=[]
+        for st,en in group_intervals(offering):
+            for b in busy_by_person.get(pkey,[]):
+                if intervals_overlap(st,en,b['start'],b['end']): conflicts.append(b)
+        return conflicts
+
+    def eligible_offerings(rec, prereq_bound=None, pkey=None):
+        title_key=norm(rec['Training_Title'])
+        all_offerings=sessions_by_title.get(title_key,[])
+        structurally=[]; candidates=[]; overlap_rejected=[]; capacity_exhausted=[]
+        for off in all_offerings:
+            if norm(off['Availability_Status'])!='open': continue
+            if remaining.get(off['Session_Key'],0)<=0:
+                # Track only if this offering had a positive opening balance.
+                if opening.get(off['Session_Key'],0)>0: capacity_exhausted.append(off)
+                continue
+            first_start=off['First_Start']
+            if rec.get('Anchor_Date') and first_start < rec['Anchor_Date']: continue
+            if prereq_bound and first_start <= prereq_bound: continue
+            if not timing_ok(rec,first_start): continue
+            # Require a usable standardized location for physical offerings when distance selection is needed.
+            structurally.append(off)
+            if pkey:
+                conflicts=offering_conflicts(pkey,off)
+                if conflicts:
+                    overlap_rejected.append((off,conflicts)); continue
+            candidates.append(off)
+        return all_offerings,structurally,candidates,overlap_rejected,capacity_exhausted
+
+    def choose_offering(rec, prereq_bound=None, pkey=None):
+        all_offerings,structurally,candidates,overlap_rejected,capacity_exhausted=eligible_offerings(rec,prereq_bound,pkey)
+        if not all_offerings: return None,{'reason':'NO_TITLE','all':all_offerings,'structural':structurally,'candidates':candidates,'overlaps':overlap_rejected,'exhausted':capacity_exhausted}
+        if not candidates:
+            return None,{'reason':'NO_CANDIDATE','all':all_offerings,'structural':structurally,'candidates':candidates,'overlaps':overlap_rejected,'exhausted':capacity_exhausted}
+        physical=[]; virtual=[]
+        for off in candidates:
+            if clean(off.get('Location')): physical.append(off)
+            else: virtual.append(off)
+        mapped=[]; unmapped=[]
+        for off in physical:
+            d=dist(rec['Physical_Location'],off.get('Location'))
+            if d is None: unmapped.append(off)
+            else: mapped.append((d,off))
+        within=[(d,off) for d,off in mapped if d<=MAX_DISTANCE_MILES]
+        if within:
+            nearest=min(d for d,_ in within)
+            nearest_locs={norm(off['Location']) for d,off in within if abs(d-nearest)<0.01}
+            eligible=[(d,off) for d,off in within if norm(off['Location']) in nearest_locs]
+            _,chosen=min(eligible,key=lambda x:(x[1]['First_Start'],x[0]))
+            return chosen,{'reason':'PHYSICAL','distance':round(nearest,1),'mapped':mapped,'unmapped':unmapped}
+        if virtual:
+            chosen=min(virtual,key=lambda off:off['First_Start'])
+            return chosen,{'reason':'VIRTUAL','mapped':mapped,'unmapped':unmapped}
+        if mapped:
+            return None,{'reason':'OVER_130','nearest':min(d for d,_ in mapped),'mapped':mapped,'unmapped':unmapped}
+        return None,{'reason':'LOCATION_UNMAPPED','mapped':mapped,'unmapped':unmapped}
+
+    # Schedule each canonical staffing event independently. Within an employee/event,
+    # requirements are selected in policy order: TARGET_RANGE first, then FIRST_AVAILABLE.
+    # Dependency readiness always wins over phase order (a prerequisite must be scheduled first).
     for ev in sorted(events,key=lambda e:(e.get('Anchor_Date') or datetime.max,e['Event_Key'])):
-        er=list(req_event.get(ev['Event_Key'],{}).values()); memo={}; er.sort(key=lambda r:(depth(r,memo),norm(r['Training_Title'])))
-        for rec in er:
-            if rec['Disposition']!='PENDING_SCHEDULING': continue
-            prereq=norm(rec.get('Prerequisite')); prereq_bound=None
-            if prereq:
-                pr=req_event[rec['Event_Key']].get(prereq)
-                if pr:
-                    rec['Prerequisite_Status']=pr['Disposition']
-                    if pr['Disposition'] in ('PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION'): rec['Prerequisite_Status']='SATISFIED_BY_COMPLETION'
-                    elif pr['Disposition']=='PROPOSED_SCHEDULE' and dt(pr.get('Selected_Start')): prereq_bound=dt(pr['Selected_Start']); rec['Prerequisite_Scheduled_Start']=pr['Selected_Start']
-                    elif pr['Disposition']=='ALREADY_ENROLLED' and dt(pr.get('Existing_Session_Start')): prereq_bound=dt(pr['Existing_Session_Start']); rec['Prerequisite_Scheduled_Start']=pr['Existing_Session_Start']
-                    else: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' is not in a schedulable state/date ({pr['Disposition']})."; continue
-                else:
+        pending={k:r for k,r in req_event.get(ev['Event_Key'],{}).items() if r['Disposition']=='PENDING_SCHEDULING'}
+        memo={}
+        while pending:
+            ready=[]
+            for k,rec in pending.items():
+                p=norm(rec.get('Prerequisite'))
+                prereq_rec=req_event[rec['Event_Key']].get(p) if p else None
+                prereq_bound=None; blocked=False
+                if prereq_rec:
+                    if prereq_rec['Disposition'] in ('PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION','SATISFIED_BY_SAME_RUN_ASSIGNMENT'):
+                        if prereq_rec['Disposition']=='SATISFIED_BY_SAME_RUN_ASSIGNMENT':
+                            prereq_bound=dt(prereq_rec.get('Selected_Start'))
+                        else: rec['Prerequisite_Status']='SATISFIED_BY_COMPLETION'
+                    elif prereq_rec['Disposition']=='ALREADY_ENROLLED' and dt(prereq_rec.get('Existing_Session_Start')):
+                        prereq_bound=dt(prereq_rec.get('Existing_Session_Start')); rec['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'
+                    elif prereq_rec['Disposition']=='PROPOSED_SCHEDULE' and dt(prereq_rec.get('Selected_Start')):
+                        prereq_bound=dt(prereq_rec.get('Selected_Start')); rec['Prerequisite_Status']='SCHEDULED_EARLIER'
+                    elif prereq_rec['Disposition'] in pending or prereq_rec['Disposition']=='PENDING_SCHEDULING':
+                        blocked=True
+                    else:
+                        rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' is not in a schedulable state/date ({prereq_rec['Disposition']})."
+                        blocked=False
+                elif p:
                     person_hist=hist_by_wid.get(rec['WID'],[]) or hist_by_eid.get(rec['Employee_ID'],[])
                     prereq_titles=satisfaction_titles(rec.get('Prerequisite'))
                     ph=[h for h in person_hist if norm(h.get('Record Learning Content')) in prereq_titles and norm(h.get('Record Completion Status'))=='completed']
                     if ph: rec['Prerequisite_Status']='SATISFIED_BY_PRIOR_COMPLETION'
                     else:
                         pe=[o for o in orient_by_eid.get(rec['Employee_ID'],[]) if norm(o.get('Enrolled Course Offering')) in prereq_titles and norm(o.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES and dt(o.get('Start Date'))]
-                        if pe: prereq_bound=min(dt(o.get('Start Date')) for o in pe); rec['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'; rec['Prerequisite_Scheduled_Start']=prereq_bound
-                        else: rec['Disposition']='REVIEW_REQUIRED'; rec['Prerequisite_Status']='PREREQUISITE_NOT_FOUND'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' has no prior completion or dated active enrollment (including configured equivalents)."; continue
+                        if pe:
+                            prereq_bound=min(dt(o.get('Start Date')) for o in pe); rec['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'
+                        else:
+                            rec['Disposition']='REVIEW_REQUIRED'; rec['Prerequisite_Status']='PREREQUISITE_NOT_FOUND'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' has no prior completion or dated active enrollment."; blocked=False
+                if not blocked and rec['Disposition']=='PENDING_SCHEDULING': ready.append((rec,prereq_bound))
 
-            # If this person already received this course in this run, do not
-            # create a second enrollment. The existing assignment must still satisfy
-            # this staffing event's timing and prerequisite constraints; otherwise
-            # surface the second event for review rather than double-enroll the person.
-            pkey=_person_key(rec.get('WID'),rec.get('Employee_ID'))
-            course_key=(pkey,norm(rec['Training_Title']))
-            prior_assignment=same_run_assignment.get(course_key)
-            if prior_assignment is not None:
-                prior_start=dt(prior_assignment.get('Selected_Start'))
-                valid_for_event=bool(prior_start and (not rec.get('Anchor_Date') or prior_start >= rec['Anchor_Date']) and timing_ok(rec,prior_start))
-                if prereq_bound and prior_start:
-                    valid_for_event=valid_for_event and prior_start > prereq_bound
-                if valid_for_event:
-                    for fld in ('Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles'):
-                        rec[fld]=prior_assignment.get(fld,'')
-                    rec['Disposition']='SATISFIED_BY_SAME_RUN_ASSIGNMENT'
-                    rec['Workday_Ready']='No'
-                    rec['Satisfied_By_Event_Key']=prior_assignment.get('Event_Key','')
-                    rec['Satisfied_By_Session_WID']=prior_assignment.get('Selected_Session_WID','')
-                    rec['Explanation']=f"Same person/course was already assigned once in this run under staffing event {prior_assignment.get('Event_Key','')}; this requirement is satisfied by that single enrollment."
-                else:
-                    rec['Disposition']='REVIEW_REQUIRED'
-                    rec['Workday_Ready']='No'
-                    rec['Satisfied_By_Event_Key']=prior_assignment.get('Event_Key','')
-                    rec['Satisfied_By_Session_WID']=prior_assignment.get('Selected_Session_WID','')
-                    rec['Explanation']="This person already has the same course assigned once in this run, but that shared session does not satisfy this staffing event's timing/prerequisite rule. A second enrollment was not created."
+            # Remove rows moved to review in prerequisite validation.
+            for k in list(pending):
+                if req_event[ev['Event_Key']].get(k,{}).get('Disposition')!='PENDING_SCHEDULING': pending.pop(k,None)
+            if not ready:
+                # Remaining pending requirements have an unresolved prerequisite chain.
+                for rec in pending.values():
+                    rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f"Prerequisite '{rec.get('Prerequisite')}' could not be resolved before this scheduling pass." if rec.get('Prerequisite') else 'Scheduling engine could not resolve this requirement.'
+                pending.clear(); break
+
+            pkey=_person_key(ev.get('WID'),ev.get('Employee_ID'))
+            # Evaluate best currently feasible offering for every ready requirement.
+            evaluated=[]
+            for rec,prereq_bound in ready:
+                # Same-person same-course protection comes before offering selection.
+                course_key=(pkey,norm(rec['Training_Title']))
+                prior=same_run_assignment.get(course_key)
+                if prior is not None:
+                    prior_start=dt(prior.get('Selected_Start'))
+                    valid=bool(prior_start and (not rec.get('Anchor_Date') or prior_start>=rec['Anchor_Date']) and timing_ok(rec,prior_start) and (not prereq_bound or prior_start>prereq_bound))
+                    rec['Disposition']='SATISFIED_BY_SAME_RUN_ASSIGNMENT'; rec['Workday_Ready']='No'; rec['Satisfied_By_Event_Key']=prior.get('Event_Key',''); rec['Satisfied_By_Session_WID']=prior.get('Selected_Session_WID','')
+                    if valid:
+                        for fld in ('Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Selection_Order','Selection_Phase'): rec[fld]=prior.get(fld,'')
+                        rec['Explanation']=f"Same person/course was already assigned once in this run under staffing event {prior.get('Event_Key','')}; this requirement is satisfied by that single enrollment."
+                    else:
+                        rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='This person already has the same course assigned once in this run, but that shared session does not satisfy this staffing event timing/prerequisite rule. A second enrollment was not created.'
+                    pending.pop(norm(rec['Training_Title']),None); continue
+                chosen,meta=choose_offering(rec,prereq_bound,pkey)
+                if chosen is None:
+                    if meta['reason']=='NO_TITLE': rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='No session title matches this training requirement.'
+                    elif meta['reason']=='NO_CANDIDATE':
+                        if meta.get('overlaps') and meta.get('structural'):
+                            labels=[]
+                            for _,conf in meta['overlaps'][:5]:
+                                for b in conf:
+                                    lab=f"{b['title']} ({b['start']:%m/%d/%Y %I:%M %p}-{b['end']:%I:%M %p})"
+                                    if lab not in labels: labels.append(lab)
+                            rec['Conflict_Detail']='; '.join(labels); rec['Explanation']='All otherwise eligible sessions overlap an existing or newly selected class for this employee.'
+                        elif meta.get('exhausted'): rec['Explanation']='Eligible session capacity was consumed by earlier assignments in this scheduling run.'; rec['Disposition']='REVIEW_REQUIRED'
+                        else: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='No open session with remaining seats meets date/policy/prerequisite/non-overlap criteria.'
+                    elif meta['reason']=='OVER_130': rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f"Nearest eligible physical session is {meta['nearest']:.1f} miles away, over the {MAX_DISTANCE_MILES:.0f}-mile limit, and no virtual session exists."
+                    else: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Eligible physical sessions exist but their locations could not be mapped, and no virtual session exists.'
+                    pending.pop(norm(rec['Training_Title']),None); continue
+                evaluated.append((rec,prereq_bound,chosen,meta))
+
+            if not evaluated:
                 continue
 
-            all_s=sessions_by_title.get(norm(rec['Training_Title']),[])
-            if not all_s: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='No session title matches this training requirement.'; continue
-            candidates=[]; overlap_rejected=[]; structurally_eligible=[]
-            pkey=_person_key(rec.get('WID'),rec.get('Employee_ID'))
-            for s in all_s:
-                st=dt(s.get('Start Date')); en=dt(s.get('End Date')); k=skey(s)
-                if norm(s.get('Availability Status'))!='open' or not st or not en or en <= st: continue
-                if rec['Anchor_Date'] and st < rec['Anchor_Date']: continue
-                if prereq_bound and st <= prereq_bound: continue
-                if not timing_ok(rec,st): continue
-                structurally_eligible.append(s)
-                if remaining.get(k,0)<=0: continue
-                conflicts=[b for b in busy_by_person.get(pkey,[]) if intervals_overlap(st,en,b['start'],b['end'])]
-                if conflicts:
-                    overlap_rejected.append((s,conflicts))
-                    continue
-                candidates.append(s)
-            if not candidates:
-                capacity_available=[s for s in structurally_eligible if remaining.get(skey(s),0)>0]
-                exhausted=[s for s in structurally_eligible if opening.get(skey(s),0)>0 and remaining.get(skey(s),0)<=0]
-                rec['Disposition']='REVIEW_REQUIRED'
-                if capacity_available and overlap_rejected and len(overlap_rejected) >= len(capacity_available):
-                    titles=[]
-                    for _,conflicts in overlap_rejected[:5]:
-                        for b in conflicts:
-                            label=f"{b['title']} ({b['start']:%m/%d/%Y %I:%M %p}-{b['end']:%I:%M %p})"
-                            if label not in titles: titles.append(label)
-                    rec['Conflict_Detail']='; '.join(titles)
-                    rec['Explanation']='All otherwise eligible sessions overlap an existing or newly selected class for this employee.'
-                elif exhausted:
-                    rec['Explanation']='Eligible session capacity was consumed by earlier assignments in this run.'
-                else:
-                    rec['Explanation']='No open session with remaining seats meets date/policy/prerequisite/non-overlap criteria.'
-                continue
-            physical=[s for s in candidates if clean(s.get('Locations'))]; virtual=[s for s in candidates if not clean(s.get('Locations'))]
-            mapped=[]
-            for s in physical:
-                d=dist(rec['Physical_Location'],clean(s.get('Locations')))
-                if d is not None: mapped.append((d,s))
-            within=[(d,s) for d,s in mapped if d<=MAX_DISTANCE_MILES]
-            chosen=None; chosen_dist=''; explanation=''
-            if within:
-                nearest=min(d for d,_ in within)
-                nearest_loc=norm(min((s for d,s in within if abs(d-nearest)<0.01),key=lambda s:dt(s.get('Start Date'))).get('Locations'))
-                eligible=[(d,s) for d,s in within if norm(s.get('Locations'))==nearest_loc]
-                chosen_dist,chosen=min(eligible,key=lambda x:dt(x[1].get('Start Date'))); chosen_dist=round(chosen_dist,1)
-                explanation=f'Selected earliest eligible physical session at nearest location ({chosen_dist:.1f} miles).'
-            elif virtual:
-                chosen=min(virtual,key=lambda s:dt(s.get('Start Date'))); explanation=f'No eligible physical session is within {MAX_DISTANCE_MILES:.0f} miles; selected virtual session.' if mapped else 'No eligible mapped physical session; selected virtual session.'
-            elif mapped:
-                nearest=min(d for d,_ in mapped); rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']=f'Nearest eligible physical session is {nearest:.1f} miles away, over the {MAX_DISTANCE_MILES:.0f}-mile limit, and no virtual session exists.'; continue
-            else:
-                rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Eligible physical sessions exist but their locations cannot be mapped, and no virtual session exists.'; continue
-            k=skey(chosen); before=remaining.get(k,0)
-            if before<=0: rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Selected session lost its last remaining seat during processing.'; continue
-            remaining[k]=before-1
-            rec.update({'Disposition':'PROPOSED_SCHEDULE','Selected_Session_WID':id_norm(chosen.get('WID')),'Selected_Reference_ID':clean(chosen.get('Reference ID')),'Selected_Start':chosen.get('Start Date'),'Selected_End':chosen.get('End Date'),'Selected_Location':clean(chosen.get('Locations')) or 'Virtual','Distance_Miles':chosen_dist,'Original_Available_Seats':opening.get(k,0),'Remaining_Seats_After_Reservation':remaining[k],'Workday_Ready':'Yes','Explanation':explanation})
+            # Phase rule: TARGET_RANGE requirements before FIRST_AVAILABLE. If any target
+            # has a feasible candidate, choose from targets only. Otherwise choose FIRST_AVAILABLE.
+            target=[x for x in evaluated if norm(x[0]['Scheduling_Policy'])=='target_range']
+            first=[x for x in evaluated if norm(x[0]['Scheduling_Policy'])=='first_available']
+            pool=target if target else first
+            if not pool:
+                pool=evaluated
+
+            # For FIRST_AVAILABLE, earliest candidate datetime is primary, priority is the
+            # tie-break when different classes compete at the same date/time. Lower priority number wins.
+            def rank(x):
+                rec,pre,off,meta=x
+                phase=0 if norm(rec['Scheduling_Policy'])=='target_range' else 1
+                return (phase,off['First_Start'],priority_value(rec),norm(rec['Training_Title']))
+            selected=sorted(pool,key=rank)[0]
+            rec,prereq_bound,chosen,meta=selected
+
+            before=remaining.get(chosen['Session_Key'],0)
+            if before<=0:
+                rec['Disposition']='REVIEW_REQUIRED'; rec['Explanation']='Selected session lost its last remaining seat during processing.'; pending.pop(norm(rec['Training_Title']),None); continue
+            remaining[chosen['Session_Key']]=before-1
+            selection_counter += 1
+            rec.update({'Selection_Order':selection_counter,'Selection_Phase':'TARGET_RANGE' if norm(rec.get('Scheduling_Policy'))=='target_range' else 'FIRST_AVAILABLE','Disposition':'PROPOSED_SCHEDULE','Selected_Session_WID':chosen['WID'],'Selected_Reference_ID':chosen['Reference_ID'],'Selected_Start':chosen['First_Start'],'Selected_End':chosen['Last_End'],'Selected_Location':chosen['Location'] or 'Virtual','Distance_Miles':meta.get('distance',''),'Original_Available_Seats':opening[chosen['Session_Key']],'Remaining_Seats_After_Reservation':remaining[chosen['Session_Key']],'Selected_Day_Count':chosen['Day_Count'],'Selected_Multi_Day':'Yes' if chosen['Multi_Day'] else 'No','Selected_Session_Days':' | '.join(f"{st:%m/%d/%Y %I:%M %p}-{en:%I:%M %p}" for st,en in chosen['Intervals']),'Workday_Ready':'Yes'})
+            if prereq_bound: rec['Explanation']=meta.get('explanation', '') or 'Selected eligible session.'; rec['Explanation'] += f" Prerequisite scheduled earlier ({prereq_bound.strftime('%m/%d/%Y')})."
+            else: rec['Explanation']=meta.get('explanation','Selected eligible session.')
+            if meta.get('reason')=='PHYSICAL': rec['Explanation']=f"Selected earliest eligible physical multi-day offering at nearest location ({meta['distance']:.1f} miles)." if chosen['Multi_Day'] else f"Selected earliest eligible physical session at nearest location ({meta['distance']:.1f} miles)."
+            elif meta.get('reason')=='VIRTUAL': rec['Explanation']='No eligible physical session was available within the 130-mile limit; selected earliest eligible virtual session.'
             if prereq_bound: rec['Explanation'] += f" Prerequisite scheduled earlier ({prereq_bound.strftime('%m/%d/%Y')})."
-            chosen_st=dt(chosen.get('Start Date')); chosen_en=dt(chosen.get('End Date'))
-            if chosen_st and chosen_en and chosen_en > chosen_st:
-                busy_by_person[pkey].append({'start':chosen_st,'end':chosen_en,'source':'SELECTED','title':rec['Training_Title'],'event_key':rec['Event_Key']})
-            same_run_assignment[(pkey,norm(rec['Training_Title']))]=rec
-            reservations.append({'Session_Key':k,'Training_Title':rec['Training_Title'],'Start_Date':chosen.get('Start Date'),'End_Date':chosen.get('End Date'),'Location':clean(chosen.get('Locations')) or 'Virtual','Employee_ID':rec['Employee_ID'],'WID':rec['WID'],'Person_Key':rec.get('Person_Key',pkey),'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[k]})
 
+            # Block every day/lesson interval of a multi-day offering.
+            for st,en in chosen['Intervals']:
+                busy_by_person[pkey].append({'start':st,'end':en,'source':'SELECTED','title':rec['Training_Title'],'event_key':rec['Event_Key']})
+            same_run_assignment[(pkey,norm(rec['Training_Title']))]=rec
+            reservations.append({'Session_Key':chosen['Session_Key'],'Training_Title':rec['Training_Title'],'Start_Date':chosen['First_Start'],'End_Date':chosen['Last_End'],'Selected_Day_Count':chosen['Day_Count'],'Selected_Multi_Day':'Yes' if chosen['Multi_Day'] else 'No','Selected_Session_Days':rec['Selected_Session_Days'],'Location':chosen['Location'] or 'Virtual','Employee_ID':rec['Employee_ID'],'WID':rec['WID'],'Person_Key':pkey,'Event_Key':rec['Event_Key'],'Seats_Before':before,'Seats_After':remaining[chosen['Session_Key']]})
+            pending.pop(norm(rec['Training_Title']),None)
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
 
-    req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_columns=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Priority','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Selection_Order','Selection_Phase','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     requirements_df=pd.DataFrame(reqs,columns=req_columns)
     return {
         'events':pd.DataFrame(events),
