@@ -1,4 +1,4 @@
-# v2.9 deployment
+# v2.9.1 deployment
 
 Replace the current GitHub application with the contents of this folder.
 
@@ -14,7 +14,7 @@ config/Scheduler_Configuration.xlsx
 assets/...
 ```
 
-Commit the changes to `main`, let Streamlit redeploy, and confirm the app subtitle starts with `v2.9`.
+Commit the changes to `main`, let Streamlit redeploy, and confirm the app subtitle starts with `v2.9.1`.
 
 Use the current `Scheduler_Configuration.xlsx` included here. It contains the Training Rules Priority column and your current Equivalencies configuration.
 
@@ -26,3 +26,7 @@ Each run requires:
 - Orientation Schedule — Lesson-Level Detail
 
 The results package contains the Workday files and the Requirement Audit. There is no approval/denial step.
+
+
+## v2.9.1
+This release is a compatibility fix for the report preflight validator. The header arguments are passed explicitly so Streamlit cannot confuse them with worksheet names.

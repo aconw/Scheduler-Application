@@ -9,7 +9,7 @@ from scheduler_engine import run_scheduler, read_sheet, norm, clean
 ROOT=Path(__file__).parent; CONFIG=ROOT/'config'/'Scheduler_Configuration.xlsx'; ASSETS=ROOT/'assets'
 st.set_page_config(page_title='Class Scheduling Application',page_icon='📚',layout='wide')
 st.title('Class Scheduling Application')
-st.caption('v2.9 • TARGET_RANGE first • FIRST_AVAILABLE priority • Multi-day sessions • No overlapping schedules')
+st.caption('v2.9.1 • Upload compatibility fix • TARGET_RANGE first • FIRST_AVAILABLE priority • Multi-day sessions • No overlapping schedules')
 
 def rb(x):
     if x is None:return None
@@ -34,7 +34,7 @@ def config_frames(raw=None):
 def validate(raw, label, required, optional=None):
     if not raw:return (False,'Not uploaded',0)
     try:
-        rows=read_sheet(raw,required,optional or [])
+        rows=read_sheet(raw, required_headers=required, optional_headers=optional or [])
         return True,f'{len(raw):,} bytes • {len(rows):,} data rows',len(rows)
     except Exception as e:return False,str(e),0
 
