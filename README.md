@@ -1,14 +1,105 @@
-# Class Scheduling Application v2.9.2
+# Class Scheduling Batch Tool — Simplified v2.7
 
-This release is a strict-change-control cleanup of the previously validated v2.8 behavior. The only scheduling changes are the agreed v2.9 changes: training-rule Priority, policy precedence (`TARGET_RANGE` before `FIRST_AVAILABLE`), multi-day session handling, and explicit training documentation status. The upload reader is called with explicit keyword arguments to prevent header lists from being interpreted as worksheet names.
+This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-Existing email drafts, Workday exports, equivalencies, existing-enrollment suppression, duplicate source-event handling, location rules, seat reservation, prerequisites, Existing Workday Training, and no-overlap behavior are retained.
+## Important v2.7 behavior
 
-## Scheduling order
-`TARGET_RANGE` requirements are scheduled before `FIRST_AVAILABLE` requirements when ready. Prerequisites can force prerequisite-first ordering. For different `FIRST_AVAILABLE` requirements competing at the same date/time, lower numeric Priority is used first; blank Priority is lowest.
+v2.7 makes the **Equivalencies** worksheet authoritative for both:
 
-## Multi-day sessions
-Available Sessions rows sharing a session WID are treated as one offering and consume one seat. Every daily Start/End interval is used for conflict checking. The audit records day count, multi-day flag, and daily intervals.
+- historical completion suppression; and
+- current / active enrollment suppression.
 
-## Training documentation status
-A staffing event with matching rules receives `TRAINING_DOCUMENTATION_FOUND`. A staffing event with no matching rules receives `NO_TRAINING_DOCUMENTATION_FOUND` and is not scheduled until documentation is added.
+Each equivalency row can be `ONE_WAY` or `TWO_WAY`.
+
+### Direction semantics
+
+The Equivalencies worksheet uses these columns:
+
+| required_training_title | equivalent_training_title | relationship_direction | active |
+|---|---|---|---|
+
+- `ONE_WAY`: `equivalent_training_title` satisfies `required_training_title`, but not the reverse.
+- `TWO_WAY`: either title satisfies the other.
+- Blank/missing direction in an older configuration workbook defaults to `ONE_WAY`.
+
+Example already included in the bundled configuration:
+
+`Cardiac Monitoring Blended Learning Session 1 - Sinus, Atrial & Junctional Rhythms` ↔ `Cardiac Monitoring` = `TWO_WAY`
+
+This means an employee already enrolled in either class will not be assigned the other, and historical completion of either class can satisfy the other.
+
+Equivalencies are direct mappings only; the application does not infer additional transitive relationships through chains of equivalencies.
+
+## Duplicate staffing-event protection retained
+
+Before training requirements are generated, the scheduler collapses duplicate source staffing events for the same person when event type, hire/effective date, job/position context, cost center, supervisory organization, physical location, worker type, and traveler designation are identical.
+
+The canonical staffing event is scheduled once. Duplicate source rows remain visible on the **Duplicate Source Events** audit sheet but cannot reserve seats or create Workday enrollments.
+
+## Run workflow
+
+Upload for each run:
+
+- New Hire Orientation Report and/or New / Additional Job Change Report
+- Training History / Learning Transcript
+- Learning Content / Available Sessions
+- Existing Orientation Schedule (required for overlap prevention and existing-enrollment suppression)
+
+Then click **Run Scheduling** and download the export package.
+
+## Export package
+
+`Class_Scheduling_Export_Package.zip` contains:
+
+- `Workday/Enroll_In_Learning_Content_Employees.xlsx`
+- `Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx` when applicable
+- `Scheduling_Results_and_Audit.xlsx`
+  - Selected Sessions
+  - Requirement Audit
+  - Review Queue
+  - Seat Audit
+  - Duplicate Source Events
+  - Run Summary
+
+The Requirement Audit includes fields showing the observed completion/enrollment title, equivalency used, direction, and whether a two-way relationship was matched in the forward or reverse direction.
+
+## Scheduling protections
+
+- Candidate Position ID is Job Code for new hires.
+- WID is the preferred durable person identity.
+- Duplicate source staffing events are collapsed before requirement generation.
+- General and supervisory-organization-specific requirements are additive.
+- Historical completion permanently satisfies a requirement.
+- Configured equivalents apply to both historical completions and active enrollments.
+- Existing active enrollment suppresses duplicate registration.
+- A person/course is selected only once in a run.
+- A person/session is selected only once in a run.
+- Employee sessions may not overlap.
+- Existing Workday orientation classes are treated as blocked time.
+- Physical sessions are preferred to virtual sessions.
+- Nearest eligible physical site is prioritized within the 130-mile limit.
+- TARGET_RANGE does not schedule outside the configured window.
+- FIRST_AVAILABLE chooses the earliest eligible session at the nearest eligible location.
+- Seats are consumed inside the run to prevent double assignment.
+- Prerequisites must occur earlier and may be chained.
+- Configured equivalencies are also considered when checking an external prerequisite completion/enrollment.
+- FLAG_MANUAL remains a manual-scheduling disposition.
+
+## Configuration
+
+`config/Scheduler_Configuration.xlsx` contains:
+
+- Training Rules
+- Locations
+- Equivalencies
+- Manual Routing
+
+The configuration workbook may be downloaded, edited, and uploaded back into the app. No server-side database is required.
+
+## v2.7 change: existing Workday training
+The Orientation Schedule report is used for two purposes:
+
+1. It blocks new selections that overlap an active existing enrollment.
+2. The app shows every active enrollment found for the uploaded population in the results and in the `Existing Workday Training` audit sheet, even when that training is not required for the current role.
+
+The source report is lesson-level; duplicate lesson rows for the same person/course offering/start/end are collapsed to one session-level row for display.
