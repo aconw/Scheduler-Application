@@ -352,18 +352,50 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
                 starts.append(s['start'])
         return min(starts) if starts else datetime.max
 
+    # Build a policy-prioritized topological order. Prerequisites are hard dependencies,
+    # but among requirements that are currently dependency-ready, TARGET_RANGE always
+    # precedes FIRST_AVAILABLE. This prevents a depth-0 FIRST_AVAILABLE class from
+    # reserving time before a newly-ready TARGET_RANGE dependent class (for example,
+    # Nursing Ancillary Academy Day 2 after Day 1 is placed).
+    pending=[r for r in reqs if r['Disposition']=='PENDING_SCHEDULING']
+    node_by_key={(r['Event_Key'],norm(r['Training_Title'])):r for r in pending}
+    indegree={k:0 for k in node_by_key}
+    dependents=defaultdict(list)
+    for k,r in node_by_key.items():
+        p=norm(r.get('Prerequisite'))
+        pk=(r['Event_Key'],p)
+        if p and pk in node_by_key:
+            indegree[k]+=1
+            dependents[pk].append(k)
+
+    def ready_key(r):
+        prank=_policy_rank(r['Scheduling_Policy'])
+        return (
+            prank,
+            first_available_hint(r) if prank==1 else datetime.max,
+            _priority(r['Priority']) if prank==1 else 10**9,
+            r.get('Anchor_Date') or datetime.max,
+            r['Event_Key'],
+            norm(r['Training_Title']))
+
+    ready=[k for k,n in indegree.items() if n==0]
     all_pending=[]
-    for e in sorted(events,key=lambda x:(x.get('Anchor_Date') or datetime.max,x['Event_Key'])):
-        memo={}; ers=[x for x in req_event[e['Event_Key']].values() if x['Disposition']=='PENDING_SCHEDULING']
-        # Hard prerequisite depth is first. Then requested scheduling-policy precedence.
-        # Among FIRST_AVAILABLE requirements, lower numeric Priority wins; blank priority is last.
-        ers.sort(key=lambda r:(
-            depth(r,memo),
-            _policy_rank(r['Scheduling_Policy']),
-            first_available_hint(r) if _policy_rank(r['Scheduling_Policy'])==1 else datetime.max,
-            _priority(r['Priority']) if _policy_rank(r['Scheduling_Policy'])==1 else 10**9,
-            norm(r['Training_Title']),r['Event_Key']))
-        all_pending.extend(ers)
+    while ready:
+        ready.sort(key=lambda k:ready_key(node_by_key[k]))
+        k=ready.pop(0)
+        all_pending.append(node_by_key[k])
+        for child in dependents.get(k,[]):
+            indegree[child]-=1
+            if indegree[child]==0:
+                ready.append(child)
+
+    # Cycles are not schedulable, but retain deterministic processing so the existing
+    # prerequisite/review logic can surface them instead of silently dropping rows.
+    if len(all_pending)<len(pending):
+        emitted={(r['Event_Key'],norm(r['Training_Title'])) for r in all_pending}
+        remainder=[r for r in pending if (r['Event_Key'],norm(r['Training_Title'])) not in emitted]
+        remainder.sort(key=ready_key)
+        all_pending.extend(remainder)
 
     reservations=[]
     for r in all_pending:
