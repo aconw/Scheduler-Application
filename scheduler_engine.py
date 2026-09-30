@@ -2,6 +2,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, date
 from io import BytesIO
+from pathlib import Path
 import math, re, unicodedata
 import openpyxl
 import pandas as pd
@@ -82,8 +83,12 @@ def _matches(h, canonical):
 def read_sheet(source, required_headers, optional_headers=None, scan_rows=150):
     if isinstance(source,(bytes,bytearray)): raw=bytes(source)
     elif hasattr(source,'getvalue'): raw=bytes(source.getvalue())
+    elif hasattr(source,'read'):
+        try: source.seek(0)
+        except Exception: pass
+        raw=source.read()
     else:
-        source.seek(0); raw=source.read()
+        raw=Path(source).read_bytes() if isinstance(source,(str,Path)) else bytes(source)
     if not raw: raise ValueError('Uploaded Excel file is empty.')
     wb=openpyxl.load_workbook(BytesIO(raw),read_only=False,data_only=True)
     best=None
@@ -181,6 +186,20 @@ def run_scheduler(new_hire, job_change, history, sessions, rules_df, locations_d
         else:
             ev['Canonical_Event_Key']=ev['Event_Key'];seen_events[sig]=ev;canonical.append(ev)
     events=canonical
+
+    # Restore the established WID-first identity behavior for Workday output.
+    # WID remains the durable identity; when multiple staffing events for the same
+    # WID have different Employee IDs, use the most recent event's Employee ID as
+    # the current Workday learner identifier.
+    latest_employee_id={}
+    for ev in events:
+        pk=ev['Person_Key']
+        stamp=ev.get('Anchor_Date') or datetime.min
+        prior=latest_employee_id.get(pk)
+        if prior is None or stamp >= prior[0]:
+            latest_employee_id[pk]=(stamp,ev.get('Employee_ID',''))
+    for ev in events:
+        ev['Current_Employee_ID']=latest_employee_id.get(ev['Person_Key'],(None,ev.get('Employee_ID','')))[1] or ev.get('Employee_ID','')
 
     rules=[]
     for _,r in rules_df.iterrows():
@@ -357,7 +376,7 @@ def run_scheduler(new_hire, job_change, history, sessions, rules_df, locations_d
             for st,en in o['Intervals']:busy[r['Person_Key']].append({'start':st,'end':en,'title':r['Training_Title'],'source':'SELECTED'})
             assigned_course[(r['Person_Key'],norm(r['Training_Title']))]=r
 
-    req_cols=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Training_Documentation_Status','Priority','Prerequisite','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Prerequisite_Status','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Original_Available_Seats','Remaining_Seats_After_Reservation','Selection_Order','Selection_Phase','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready']
+    req_cols=['Event_Key','Event_Type','Employee_ID','Current_Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Title','Training_Documentation_Status','Priority','Prerequisite','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Prerequisite_Status','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Distance_Miles','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Original_Available_Seats','Remaining_Seats_After_Reservation','Selection_Order','Selection_Phase','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready']
     requirements=pd.DataFrame(reqs)
     for c in req_cols:
         if c not in requirements.columns:requirements[c]=''

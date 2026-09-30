@@ -1,32 +1,22 @@
-# v2.9.1 deployment
+# Start Here — v2.9.3 Strict Cleanup
 
-Replace the current GitHub application with the contents of this folder.
+v2.9.3 is a controlled cleanup of v2.9.2. Replace the application files as a complete set.
 
-Repository root:
-
-```text
+## Repository root
+```
 app.py
 scheduler_engine.py
 requirements.txt
 README.md
 START_HERE.md
-config/Scheduler_Configuration.xlsx
-assets/...
+RELEASE_NOTES_v2_9_3.md
+assets/
+config/
 ```
 
-Commit the changes to `main`, let Streamlit redeploy, and confirm the app subtitle starts with `v2.9.1`.
+## Only v2.9.3 cleanup changes
+- Restored Workday export duplicate protection for Person + Session WID in addition to Person + Course.
+- Restored richer workbook preflight diagnostics.
+- No change was made to the v2.9.2 nearest-location selection algorithm; it was verified by regression testing.
 
-Use the current `Scheduler_Configuration.xlsx` included here. It contains the Training Rules Priority column and your current Equivalencies configuration.
-
-Each run requires:
-
-- New Hire and/or New / Additional Job Change report
-- Training History / Learning Transcript
-- Learning Content / Available Sessions
-- Orientation Schedule — Lesson-Level Detail
-
-The results package contains the Workday files and the Requirement Audit. There is no approval/denial step.
-
-
-## v2.9.1
-This release is a compatibility fix for the report preflight validator. The header arguments are passed explicitly so Streamlit cannot confuse them with worksheet names.
+Confirm the app subtitle says **v2.9.3** after Streamlit redeploys.

@@ -1,24 +1,45 @@
-# Class Scheduling Application v2.9
+# Class Scheduling Application — Clean v2.9.2
+
+v2.9.2 is a stateless Streamlit batch scheduler. It is based on the last known-good v2.8 behavior with only the requested scheduling changes applied.
+
+## Run workflow
+Upload:
+- New Hire Orientation Report and/or New / Additional Job Change Report
+- Training History / Learning Transcript
+- Learning Content / Available Sessions
+- Existing Orientation Schedule — Lesson-Level Detail
+
+Click **Run Scheduling** and download the export package.
 
 ## Scheduling order
+1. Resolve requirements and prerequisites.
+2. Schedule ready `TARGET_RANGE` requirements before ready `FIRST_AVAILABLE` requirements.
+3. For competing `FIRST_AVAILABLE` requirements with the same best feasible start date/time, lower numeric Priority is selected first. Blank Priority is lowest.
+4. Existing training and newly selected sessions always block overlapping time.
 
-For each canonical employee staffing event, the scheduler uses a dependency-aware policy order:
+Prerequisite dependencies can require a prerequisite to be scheduled before a TARGET_RANGE dependent course.
 
-1. `TARGET_RANGE` requirements are selected before `FIRST_AVAILABLE` requirements when both are ready to schedule.
-2. A prerequisite must be resolved before its dependent class, so a prerequisite can override the general policy phase.
-3. For `FIRST_AVAILABLE`, location remains the primary session-selection rule: nearest eligible physical location first, then earliest session at that location; virtual is used when no eligible physical session is available within 130 miles.
-4. When different `FIRST_AVAILABLE` requirements compete for the same date/time, lower numeric `Priority` wins (`1` is higher than `2`). Blank Priority is lowest.
-5. Classes with the same session WID are treated as one offering. Multi-day offerings consume one seat and every daily interval is checked for employee conflicts.
-6. Existing Orientation Schedule sessions block overlapping new selections.
+## Multi-day sessions
+Available Sessions is lesson-level. Rows sharing the same session WID are grouped into one offering. One seat is consumed, and every daily Start/End interval participates in conflict checking.
 
-## Additional protections
+## Documentation status
+Each staffing event is explicitly classified as:
+- `TRAINING_DOCUMENTATION_FOUND`
+- `NO_TRAINING_DOCUMENTATION_FOUND`
 
-- WID is the durable person identifier.
-- Exact duplicate staffing events are collapsed before requirements are created.
-- One person/course and one person/session may reach the Workday export only once.
-- Historical completion and active enrollment can use configured equivalencies with `ONE_WAY` or `TWO_WAY` relationships.
-- Missing training documentation is reported as `NO_TRAINING_DOCUMENTATION_FOUND` rather than silently treated as no training required.
+A staffing event with no documentation does not generate automatic Workday enrollments.
 
-## Outputs
-
-The ZIP export contains Workday enrollment files plus `Scheduling_Results_and_Audit.xlsx` with Selected Sessions, Requirement Audit, Existing Workday Training, Duplicate Source Events, Seat Audit, and Run Summary.
+## Preserved functionality
+- WID-first durable person identity and current Employee ID handling
+- existing Workday training visibility
+- equivalencies for completion and active enrollment
+- duplicate source-event collapse
+- same-person/course and same-person/session protections
+- seat reservation
+- location matching and 130-mile limit
+- physical-over-virtual preference
+- prerequisites and chained prerequisites
+- FLAG_MANUAL and configurable routing
+- manager and manual email drafts (drafts only)
+- separate employee and contingent-worker Workday files
+- full Requirement Audit and scheduling audit package
