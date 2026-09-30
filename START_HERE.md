@@ -1,16 +1,9 @@
-# Start Here — v2.7
+# Start Here — Simplified v2.8
 
-## Replace the current Streamlit build
+## Replace the current GitHub build
+Replace the current application repository contents with the contents of this folder.
 
-1. Unzip `Class_Scheduling_Application_Simplified_v2_6.zip`.
-2. Replace the application files in your GitHub repository with the contents of the `simple_scheduler_v2_6` folder.
-3. Commit the changes to the `main` branch.
-4. Let Streamlit redeploy, then reboot the app once if needed.
-5. Confirm the subtitle says:
-
-**Simplified stateless build v2.7 • Directional equivalencies for completions + active enrollments • Duplicate source-event collapse • Non-overlapping scheduling**
-
-## Expected repository root
+Repository root:
 
 ```
 app.py
@@ -18,30 +11,40 @@ scheduler_engine.py
 requirements.txt
 README.md
 START_HERE.md
-RELEASE_NOTES_v2_6.md
+RELEASE_NOTES_v2_8.md
 assets/
 config/
 ```
 
-## Equivalencies in v2.7
+The packaged configuration workbook is the current workbook supplied for this v2.8 change and includes the Training Rules `priority` column.
 
-Open `config/Scheduler_Configuration.xlsx` and use the **Equivalencies** worksheet.
+After committing to `main`, let Streamlit redeploy and confirm the subtitle says:
 
-Columns:
+**Simplified stateless build v2.8 • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware • Non-overlapping scheduling**
 
-- `required_training_title`
-- `equivalent_training_title`
-- `relationship_direction`
-- `active`
+## v2.8 selection behavior
 
-`ONE_WAY` means the equivalent title satisfies the required title only.
+- Hard prerequisites are processed before dependent classes.
+- TARGET_RANGE requirements are processed before FIRST_AVAILABLE requirements within a staffing event.
+- FIRST_AVAILABLE requirements are considered in potential selection-date order; when their potential selection time ties, lower numeric `priority` wins. Blank priority is lowest.
+- Physical-location selection rules remain unchanged.
 
-`TWO_WAY` means either title satisfies the other.
+## v2.8 multi-day behavior
 
-The Cardiac Monitoring ↔ Cardiac Monitoring Blended Learning Session 1 relationship requested for this release is already included as `TWO_WAY`.
+Each WID in the Available Sessions report represents one class offering. Multiple rows with the same WID are treated as days of that one offering.
 
-These mappings are checked against both completed training and active/current enrollments before the application selects a new session.
+- One seat is reserved for the whole WID.
+- Every day's start/end interval blocks the employee's calendar.
+- Selected results include the number of days.
+- Back-to-back sessions are allowed when one interval ends exactly when another begins.
 
+## Run inputs
 
-### v2.7
-The results/audit now includes an Existing Workday Training view showing all active enrolled sessions, whether or not they satisfy a current-role requirement. Those sessions are also treated as blocked time for scheduling.
+Upload:
+
+1. New Hire and/or Job Change report
+2. Training History
+3. Learning Content / Available Sessions
+4. Existing Orientation Schedule
+
+All required preflight checks must pass before Run Scheduling is enabled.

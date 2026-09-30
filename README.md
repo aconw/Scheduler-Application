@@ -1,105 +1,44 @@
-# Class Scheduling Batch Tool — Simplified v2.7
+# Class Scheduling Batch Tool — Simplified v2.8
 
 This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-## Important v2.7 behavior
+## v2.8 changes
 
-v2.7 makes the **Equivalencies** worksheet authoritative for both:
+### Scheduling selection order
+Within each staffing event, hard prerequisites are processed first. After dependency order is satisfied:
 
-- historical completion suppression; and
-- current / active enrollment suppression.
+1. `TARGET_RANGE`
+2. `FIRST_AVAILABLE`
+3. `FLAG_MANUAL` remains a manual disposition
 
-Each equivalency row can be `ONE_WAY` or `TWO_WAY`.
+For `FIRST_AVAILABLE`, the scheduler considers the potential selection date/time. When different FIRST_AVAILABLE requirements have the same potential selection time, the lower numeric `priority` in Training Rules is processed first. Blank priority is lowest.
 
-### Direction semantics
-
-The Equivalencies worksheet uses these columns:
-
-| required_training_title | equivalent_training_title | relationship_direction | active |
-|---|---|---|---|
-
-- `ONE_WAY`: `equivalent_training_title` satisfies `required_training_title`, but not the reverse.
-- `TWO_WAY`: either title satisfies the other.
-- Blank/missing direction in an older configuration workbook defaults to `ONE_WAY`.
-
-Example already included in the bundled configuration:
-
-`Cardiac Monitoring Blended Learning Session 1 - Sinus, Atrial & Junctional Rhythms` ↔ `Cardiac Monitoring` = `TWO_WAY`
-
-This means an employee already enrolled in either class will not be assigned the other, and historical completion of either class can satisfy the other.
-
-Equivalencies are direct mappings only; the application does not infer additional transitive relationships through chains of equivalencies.
-
-## Duplicate staffing-event protection retained
-
-Before training requirements are generated, the scheduler collapses duplicate source staffing events for the same person when event type, hire/effective date, job/position context, cost center, supervisory organization, physical location, worker type, and traveler designation are identical.
-
-The canonical staffing event is scheduled once. Duplicate source rows remain visible on the **Duplicate Source Events** audit sheet but cannot reserve seats or create Workday enrollments.
-
-## Run workflow
-
-Upload for each run:
-
-- New Hire Orientation Report and/or New / Additional Job Change Report
-- Training History / Learning Transcript
-- Learning Content / Available Sessions
-- Existing Orientation Schedule (required for overlap prevention and existing-enrollment suppression)
-
-Then click **Run Scheduling** and download the export package.
-
-## Export package
-
-`Class_Scheduling_Export_Package.zip` contains:
-
-- `Workday/Enroll_In_Learning_Content_Employees.xlsx`
-- `Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx` when applicable
-- `Scheduling_Results_and_Audit.xlsx`
-  - Selected Sessions
-  - Requirement Audit
-  - Review Queue
-  - Seat Audit
-  - Duplicate Source Events
-  - Run Summary
-
-The Requirement Audit includes fields showing the observed completion/enrollment title, equivalency used, direction, and whether a two-way relationship was matched in the forward or reverse direction.
-
-## Scheduling protections
-
-- Candidate Position ID is Job Code for new hires.
-- WID is the preferred durable person identity.
-- Duplicate source staffing events are collapsed before requirement generation.
-- General and supervisory-organization-specific requirements are additive.
-- Historical completion permanently satisfies a requirement.
-- Configured equivalents apply to both historical completions and active enrollments.
-- Existing active enrollment suppresses duplicate registration.
-- A person/course is selected only once in a run.
-- A person/session is selected only once in a run.
-- Employee sessions may not overlap.
-- Existing Workday orientation classes are treated as blocked time.
-- Physical sessions are preferred to virtual sessions.
-- Nearest eligible physical site is prioritized within the 130-mile limit.
-- TARGET_RANGE does not schedule outside the configured window.
-- FIRST_AVAILABLE chooses the earliest eligible session at the nearest eligible location.
-- Seats are consumed inside the run to prevent double assignment.
-- Prerequisites must occur earlier and may be chained.
-- Configured equivalencies are also considered when checking an external prerequisite completion/enrollment.
-- FLAG_MANUAL remains a manual-scheduling disposition.
+### Multi-day sessions
+All Available Sessions rows sharing the same WID are one class offering. The scheduler reserves capacity once for the WID and stores every daily interval for conflict detection. The selected result displays the overall start, overall end, and day count.
 
 ## Configuration
-
 `config/Scheduler_Configuration.xlsx` contains:
-
 - Training Rules
 - Locations
 - Equivalencies
 - Manual Routing
 
-The configuration workbook may be downloaded, edited, and uploaded back into the app. No server-side database is required.
+The packaged configuration is the current user-supplied workbook, including the Training Rules `priority` column.
 
-## v2.7 change: existing Workday training
-The Orientation Schedule report is used for two purposes:
+## Existing features retained
+- Candidate Position ID = Job Code for new hires.
+- WID is the preferred durable person identifier.
+- Duplicate source staffing events are collapsed before requirement generation.
+- Historical completion permanently satisfies a requirement.
+- Directional ONE_WAY/TWO_WAY equivalencies apply to completion and active-enrollment suppression.
+- Existing active Workday training is displayed and blocks overlapping selections.
+- Physical sessions are preferred to virtual; nearest eligible physical location is selected within 130 miles.
+- Seats are reserved during the run.
+- Prerequisites are scheduled earlier and may be chained.
+- Employee sessions may not overlap.
+- Employee and contingent worker Workday files remain separate.
+- Requirement Audit and review/audit sheets remain in the exported package.
+- Email drafts remain optional and are not sent automatically.
 
-1. It blocks new selections that overlap an active existing enrollment.
-2. The app shows every active enrollment found for the uploaded population in the results and in the `Existing Workday Training` audit sheet, even when that training is not required for the current role.
-
-The source report is lesson-level; duplicate lesson rows for the same person/course offering/start/end are collapsed to one session-level row for display.
+## Run workflow
+Upload the New Hire and/or Job Change report, Training History, Available Sessions, and Existing Orientation Schedule. Confirm preflight validation, run scheduling, and download the results package.
