@@ -144,9 +144,9 @@ if st.button('Run Scheduling',type='primary',disabled=not ready,use_container_wi
         st.session_state.result=run_scheduler(nh,jc,hist,ses,rules,loc,eq,ori)
 
 if st.session_state.get('result') is not None:
-    res=st.session_state.result; req=res['requirements']; counts=req.Disposition.value_counts().to_dict()
+    res=st.session_state.result; req=res['requirements']; counts=req['Disposition'].value_counts().to_dict()
     st.subheader('Results')
-    metrics=[('Requirements',len(req)),('Selected',counts.get('PROPOSED_SCHEDULE',0)),('TARGET_RANGE',int((req.Selection_Phase=='TARGET_RANGE').sum())),('FIRST_AVAILABLE',int((req.Selection_Phase=='FIRST_AVAILABLE').sum())),('Review',counts.get('REVIEW_REQUIRED',0)),('No documentation',counts.get('NO_TRAINING_DOCUMENTATION_FOUND',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0))]
+    metrics=[('Requirements',len(req)),('Selected',counts.get('PROPOSED_SCHEDULE',0)),('TARGET_RANGE',int(req['Selection_Phase'].eq('TARGET_RANGE').sum())),('FIRST_AVAILABLE',int(req['Selection_Phase'].eq('FIRST_AVAILABLE').sum())),('Review',counts.get('REVIEW_REQUIRED',0)),('No documentation',counts.get('NO_TRAINING_DOCUMENTATION_FOUND',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0)),('Completed',counts.get('PREVIOUSLY_COMPLETED',0)+counts.get('EQUIVALENT_COMPLETION',0))]
     cc=st.columns(8)
     for c,(lab,val) in zip(cc,metrics):c.metric(lab,val)
     show=['Worker_Name','Employee_ID','Training_Title','Training_Documentation_Status','Priority','Scheduling_Policy','Selection_Order','Selection_Phase','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Selected_Multi_Day','Selected_Session_Days','Disposition','Conflict_Detail','Explanation']
@@ -156,6 +156,6 @@ if st.session_state.get('result') is not None:
     if ex.empty:st.info('No active/upcoming sessions found.')
     else:st.dataframe(ex,use_container_width=True,height=300)
     p,en,cn=package(res)
-    st.download_button(f'Download Export Package ({en} employee / {cn} contingent rows)',p,'Class_Scheduling_v2_9_2_Export.zip',mime='application/zip',type='primary')
+    st.download_button(f'Download Export Package ({en} employee / {cn} contingent rows)',p,'Class_Scheduling_v2_9_3_Export.zip',mime='application/zip',type='primary')
     ed,mc,man=email_drafts(res,route)
     st.download_button(f'Download Email Drafts ({mc} manager / {man} manual)',ed,'Email_Drafts.zip',mime='application/zip')
