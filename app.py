@@ -9,7 +9,7 @@ from scheduler_engine import run_scheduler, read_sheet, norm, clean
 ROOT=Path(__file__).parent; CONFIG=ROOT/'config'/'Scheduler_Configuration.xlsx'; ASSETS=ROOT/'assets'
 st.set_page_config(page_title='Class Scheduling Application',page_icon='📚',layout='wide')
 st.title('Class Scheduling Application')
-st.caption('v2.9.3 • Strict cleanup of v2.9.2 • Diagnostics + Workday duplicate safeguards')
+st.caption('v2.9.3.2 • Strict cleanup of v2.9.2 • Diagnostics + Workday duplicate safeguards')
 
 def rb(x):
     if x is None:return None
@@ -50,8 +50,8 @@ def workday_file(req, contingent=False):
     r=r[r.Worker_Type.map(norm).eq('contingent worker')] if contingent else r[~r.Worker_Type.map(norm).eq('contingent worker')]
     # Defense in depth: never export the same person/course or the same person/session twice.
     # This is intentionally independent of the scheduler's upstream duplicate protections.
-    r['_course_key']=r['Training_Title'].map(lambda v:norm(v))
-    r['_session_key']=r['Selected_Session_WID'].map(lambda v:id_norm(v))
+    r['_course_key']=[norm(v) for v in r['Training_Title'].tolist()]
+    r['_session_key']=[id_norm(v) for v in r['Selected_Session_WID'].tolist()]
     r=r.sort_values(['Person_Key','Selected_Start','Event_Key'],na_position='last')
     r=r.drop_duplicates(['Person_Key','_course_key'],keep='first')
     r=r.drop_duplicates(['Person_Key','_session_key'],keep='first')
