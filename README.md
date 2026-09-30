@@ -1,8 +1,8 @@
-# Class Scheduling Batch Tool — Simplified v2.8
+# Class Scheduling Batch Tool — Simplified v2.8.1
 
 This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-## v2.8 changes
+## v2.8.1 changes
 
 ### Scheduling selection order
 Within each staffing event, hard prerequisites are processed first. After dependency order is satisfied:

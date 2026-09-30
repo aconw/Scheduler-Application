@@ -14,7 +14,7 @@ ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuratio
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.8 • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware • Non-overlapping scheduling')
+st.caption('Simplified stateless build v2.8.1 • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware • Non-overlapping scheduling')
 
 
 def raw_bytes(upload):
@@ -86,7 +86,7 @@ def results_zip(result):
         zipf.writestr('Scheduling_Results_and_Audit.xlsx',audit)
         zipf.writestr('Workday/Enroll_In_Learning_Content_Employees.xlsx',emp)
         if cw_n: zipf.writestr('Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx',cw)
-        zipf.writestr('README.txt',f"v2.8 scheduling export generated {datetime.now():%Y-%m-%d %H:%M}. Employee rows: {emp_n}; contingent worker rows: {cw_n}.\n")
+        zipf.writestr('README.txt',f"v2.8.1 scheduling export generated {datetime.now():%Y-%m-%d %H:%M}. Employee rows: {emp_n}; contingent worker rows: {cw_n}.\n")
     return z.getvalue(),emp_n,cw_n
 
 def email_drafts(req,routing):
@@ -153,6 +153,6 @@ if st.session_state.result is not None:
     if not existing.empty: st.dataframe(existing,use_container_width=True,height=280)
     else: st.info('No active/upcoming existing Workday sessions found.')
     pkg,emp,cw=results_zip(result); st.subheader('4. Export'); st.write(f'Workday rows: {emp:,} employees / {cw:,} contingent workers. The audit workbook includes Selected Sessions, the complete Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, Existing Workday Training, and Run Summary.')
-    st.download_button('Download Scheduling Export Package',pkg,'Class_Scheduling_Export_Package_v2_8.zip',mime='application/zip',type='primary')
+    st.download_button('Download Scheduling Export Package',pkg,'Class_Scheduling_Export_Package_v2_8_1.zip',mime='application/zip',type='primary')
     st.subheader('5. Email Drafts (Optional)')
     _,_,_,route=config_frames(st.session_state.config_bytes); em,mc,mm=email_drafts(req,route); st.download_button(f'Download Email Drafts ({mc} manager / {mm} manual)',em,'Email_Drafts.zip',mime='application/zip')
