@@ -271,10 +271,30 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         title=clean(rr.get('training_title'))
         if not title: continue
         rule_index[(norm(rr.get('job_code')),norm(rr.get('cost_center')))].append(rr)
+    # Event-level training-documentation completeness check. Documentation is defined
+    # by the active Training Rules index at Job Code + Cost Center. This is deliberately
+    # separate from requirement/session dispositions so a staffing event with no
+    # documentation cannot silently disappear from the results.
+    documentation_status=[]
     reqs=[]; seen=set()
     for e in events:
-        if norm(e['Contingent_Action'])=='no schedule': continue
         candidates=rule_index.get((norm(e['Job_Code']),norm(e['Cost_Center_ID'])),[])
+        doc_status='TRAINING_DOCUMENTATION_FOUND' if candidates else 'NO_TRAINING_DOCUMENTATION_FOUND'
+        doc_explanation=(
+            f"{len(candidates)} active training rule(s) found for Job Code {e['Job_Code']} / Cost Center {e['Cost_Center_ID']}."
+            if candidates else
+            f"No active training documentation found for Job Code {e['Job_Code']} / Cost Center {e['Cost_Center_ID']}. No training assignments were generated from Training Rules for this staffing event."
+        )
+        documentation_status.append({
+            'Event_Key':e['Event_Key'],'Event_Type':e['Event_Type'],'Employee_ID':e['Employee_ID'],'WID':e['WID'],
+            'Person_Key':e['Person_Key'],'Worker_Name':e['Worker_Name'],'Worker_Type':e['Worker_Type'],
+            'Anchor_Date':e['Anchor_Date'],'Job_Code':e['Job_Code'],'Position_Title':e['Position_Title'],
+            'Cost_Center_ID':e['Cost_Center_ID'],'Cost_Center_Title':e['Cost_Center_Title'],'Sup_Org_ID':e['Sup_Org_ID'],
+            'Physical_Location':e['Physical_Location'],'Training_Documentation_Status':doc_status,
+            'Matching_Active_Rule_Count':len(candidates),'Documentation_Explanation':doc_explanation,
+        })
+        e['Training_Documentation_Status']=doc_status
+        if norm(e['Contingent_Action'])=='no schedule': continue
         for rr in candidates:
             title=clean(rr.get('training_title'))
             if clean(rr.get('supervisory_org')) and norm(rr.get('supervisory_org'))!=norm(e['Sup_Org_ID']): continue
@@ -489,9 +509,11 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         reservations.append({'Session_WID':chosen['WID'],'Training_Title':chosen['Title'],'Start_Date':chosen['start'],'End_Date':chosen['end'],'Day_Count':chosen['day_count'],'Location':chosen['Locations'] or 'Virtual','Employee_ID':r['Employee_ID'],'WID':r['WID'],'Person_Key':r['Person_Key'],'Event_Key':r['Event_Key'],'Seats_Before':session_capacity[chosen['WID']]-seat_used[chosen['WID']]+1,'Seats_After':session_capacity[chosen['WID']]-seat_used[chosen['WID']]})
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
-    req_cols=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Rule_ID','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Priority','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_cols=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Documentation_Status','Rule_ID','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Priority','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     reqdf=pd.DataFrame(reqs,columns=req_cols)
     evdf=pd.DataFrame(events)
     exdf=pd.DataFrame(existing_by_person and sum(existing_by_person.values(),[]) or [],columns=['Person_Key','WID','Employee_ID','Training_Title','Registration_Status','Start_Date','End_Date','Location','Required_For_Current_Role','Scheduling_Impact'])
     rdf=pd.DataFrame(reservations)
-    return {'events':evdf,'duplicate_events':pd.DataFrame(duplicate),'requirements':reqdf,'existing_workday':exdf,'sessions':pd.DataFrame(sessions),'seat_reservations':rdf,'summary':dict(Counter(reqdf['Disposition'])) if not reqdf.empty else {},'source_counts':{'new_hires':len(nh),'job_changes':len(jc),'staffing_events_raw':len(nh)+len(jc),'staffing_events_canonical':len(events),'duplicate_source_events':len(duplicate),'history':len(history),'sessions':len(sessions),'session_day_rows':len(sessions_raw)}}
+    docdf=pd.DataFrame(documentation_status,columns=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Training_Documentation_Status','Matching_Active_Rule_Count','Documentation_Explanation'])
+    no_doc_count=int((docdf['Training_Documentation_Status']=='NO_TRAINING_DOCUMENTATION_FOUND').sum()) if not docdf.empty else 0
+    return {'events':evdf,'duplicate_events':pd.DataFrame(duplicate),'training_documentation_status':docdf,'requirements':reqdf,'existing_workday':exdf,'sessions':pd.DataFrame(sessions),'seat_reservations':rdf,'summary':dict(Counter(reqdf['Disposition'])) if not reqdf.empty else {},'source_counts':{'new_hires':len(nh),'job_changes':len(jc),'staffing_events_raw':len(nh)+len(jc),'staffing_events_canonical':len(events),'duplicate_source_events':len(duplicate),'training_documentation_found':len(docdf)-no_doc_count,'no_training_documentation_found':no_doc_count,'history':len(history),'sessions':len(sessions),'session_day_rows':len(sessions_raw)}}

@@ -14,7 +14,7 @@ ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuratio
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.8.1 • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware • Non-overlapping scheduling')
+st.caption('Simplified stateless build v2.8.2 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
 
 
 def raw_bytes(upload):
@@ -60,13 +60,13 @@ def workday_export(req,contingent=False):
     bio=BytesIO(); wb.save(bio); return bio.getvalue(),len(rows)
 
 def audit_workbook(result):
-    req=result['requirements'].copy(); selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy(); review=req[req['Disposition']=='REVIEW_REQUIRED'].copy(); seat=result['seat_reservations'].copy(); dup=result.get('duplicate_events',pd.DataFrame()).copy(); existing=result.get('existing_workday',pd.DataFrame()).copy()
+    req=result['requirements'].copy(); selected=req[req['Disposition']=='PROPOSED_SCHEDULE'].copy(); review=req[req['Disposition']=='REVIEW_REQUIRED'].copy(); seat=result['seat_reservations'].copy(); dup=result.get('duplicate_events',pd.DataFrame()).copy(); existing=result.get('existing_workday',pd.DataFrame()).copy(); doc=result.get('training_documentation_status',pd.DataFrame()).copy()
     cols=['Event_Key','Worker_Name','Employee_ID','WID','Event_Type','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Distance_Miles','Prerequisite','Prerequisite_Status','Disposition','Explanation']
     selected=selected[[c for c in cols if c in selected.columns]]
-    summary=pd.DataFrame([{'raw_staffing_events':result['source_counts']['staffing_events_raw'],'canonical_staffing_events':result['source_counts']['staffing_events_canonical'],'duplicate_source_events':result['source_counts']['duplicate_source_events'],'requirements':len(req),'selected_sessions':int((req['Disposition']=='PROPOSED_SCHEDULE').sum()),'review_required':int((req['Disposition']=='REVIEW_REQUIRED').sum()),'manual_scheduling_required':int((req['Disposition']=='MANUAL_SCHEDULING_REQUIRED').sum()),'same_run_satisfied':int((req['Disposition']=='SATISFIED_BY_SAME_RUN_ASSIGNMENT').sum()),'already_enrolled':int((req['Disposition']=='ALREADY_ENROLLED').sum()),'completed_or_equivalent':int(req['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION']).sum())}])
+    summary=pd.DataFrame([{'raw_staffing_events':result['source_counts']['staffing_events_raw'],'canonical_staffing_events':result['source_counts']['staffing_events_canonical'],'duplicate_source_events':result['source_counts']['duplicate_source_events'],'training_documentation_found':result['source_counts'].get('training_documentation_found',0),'no_training_documentation_found':result['source_counts'].get('no_training_documentation_found',0),'requirements':len(req),'selected_sessions':int((req['Disposition']=='PROPOSED_SCHEDULE').sum()),'review_required':int((req['Disposition']=='REVIEW_REQUIRED').sum()),'manual_scheduling_required':int((req['Disposition']=='MANUAL_SCHEDULING_REQUIRED').sum()),'same_run_satisfied':int((req['Disposition']=='SATISFIED_BY_SAME_RUN_ASSIGNMENT').sum()),'already_enrolled':int((req['Disposition']=='ALREADY_ENROLLED').sum()),'completed_or_equivalent':int(req['Disposition'].isin(['PREVIOUSLY_COMPLETED','EQUIVALENT_COMPLETION']).sum())}])
     bio=BytesIO()
     with pd.ExcelWriter(bio,engine='openpyxl') as xw:
-        selected.to_excel(xw,index=False,sheet_name='Selected Sessions'); req.to_excel(xw,index=False,sheet_name='Requirement Audit'); review.to_excel(xw,index=False,sheet_name='Review Queue'); seat.to_excel(xw,index=False,sheet_name='Seat Audit'); dup.to_excel(xw,index=False,sheet_name='Duplicate Source Events'); existing.to_excel(xw,index=False,sheet_name='Existing Workday Training'); summary.to_excel(xw,index=False,sheet_name='Run Summary')
+        selected.to_excel(xw,index=False,sheet_name='Selected Sessions'); req.to_excel(xw,index=False,sheet_name='Requirement Audit'); review.to_excel(xw,index=False,sheet_name='Review Queue'); seat.to_excel(xw,index=False,sheet_name='Seat Audit'); dup.to_excel(xw,index=False,sheet_name='Duplicate Source Events'); existing.to_excel(xw,index=False,sheet_name='Existing Workday Training'); doc.to_excel(xw,index=False,sheet_name='Training Documentation Status'); summary.to_excel(xw,index=False,sheet_name='Run Summary')
     bio.seek(0); wb=openpyxl.load_workbook(bio)
     from openpyxl.styles import Font,PatternFill,Alignment
     fill=PatternFill('solid',fgColor='1F4E78'); font=Font(color='FFFFFF',bold=True)
@@ -86,7 +86,7 @@ def results_zip(result):
         zipf.writestr('Scheduling_Results_and_Audit.xlsx',audit)
         zipf.writestr('Workday/Enroll_In_Learning_Content_Employees.xlsx',emp)
         if cw_n: zipf.writestr('Workday/Enroll_In_Learning_Content_Contingent_Workers.xlsx',cw)
-        zipf.writestr('README.txt',f"v2.8.1 scheduling export generated {datetime.now():%Y-%m-%d %H:%M}. Employee rows: {emp_n}; contingent worker rows: {cw_n}.\n")
+        zipf.writestr('README.txt',f"v2.8.2 scheduling export generated {datetime.now():%Y-%m-%d %H:%M}. Employee rows: {emp_n}; contingent worker rows: {cw_n}.\n")
     return z.getvalue(),emp_n,cw_n
 
 def email_drafts(req,routing):
@@ -143,16 +143,23 @@ if st.button('Run Scheduling',type='primary',disabled=not ready,use_container_wi
     except Exception as e: st.exception(e)
 
 if st.session_state.result is not None:
-    result=st.session_state.result; req=result['requirements']; counts=req['Disposition'].value_counts().to_dict(); dup=len(result.get('duplicate_events',pd.DataFrame()))
+    result=st.session_state.result; req=result['requirements']; counts=req['Disposition'].value_counts().to_dict(); dup=len(result.get('duplicate_events',pd.DataFrame())); doc=result.get('training_documentation_status',pd.DataFrame())
     st.subheader('3. Results')
-    cols=st.columns(7); metrics=[('Requirements',len(req)),('Selected',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Duplicate source events',dup),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
+    no_doc=int((doc['Training_Documentation_Status']=='NO_TRAINING_DOCUMENTATION_FOUND').sum()) if not doc.empty else 0
+    cols=st.columns(8); metrics=[('Requirements',len(req)),('Selected',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Duplicate source events',dup),('No training documentation',no_doc),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
     for c,(lab,v) in zip(cols,metrics): c.metric(lab,v)
     st.dataframe(req[['Worker_Name','Employee_ID','Event_Type','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation']][[c for c in ['Worker_Name','Employee_ID','Event_Type','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation'] if c in req.columns]],use_container_width=True,height=430)
+    st.markdown('### Training Documentation Status')
+    st.caption("Every canonical staffing event is shown. NO_TRAINING_DOCUMENTATION_FOUND means no active Training Rules matched that event's Job Code + Cost Center; the application does not interpret that as no training required.")
+    if not doc.empty:
+        st.dataframe(doc,use_container_width=True,height=280)
+    else:
+        st.info('No staffing events were available for training-documentation validation.')
     existing=result.get('existing_workday',pd.DataFrame())
     st.markdown('### Existing Workday Training')
     if not existing.empty: st.dataframe(existing,use_container_width=True,height=280)
     else: st.info('No active/upcoming existing Workday sessions found.')
-    pkg,emp,cw=results_zip(result); st.subheader('4. Export'); st.write(f'Workday rows: {emp:,} employees / {cw:,} contingent workers. The audit workbook includes Selected Sessions, the complete Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, Existing Workday Training, and Run Summary.')
-    st.download_button('Download Scheduling Export Package',pkg,'Class_Scheduling_Export_Package_v2_8_1.zip',mime='application/zip',type='primary')
+    pkg,emp,cw=results_zip(result); st.subheader('4. Export'); st.write(f'Workday rows: {emp:,} employees / {cw:,} contingent workers. The audit workbook includes Selected Sessions, the complete Requirement Audit, Review Queue, Seat Audit, Duplicate Source Events, Existing Workday Training, Training Documentation Status, and Run Summary.')
+    st.download_button('Download Scheduling Export Package',pkg,'Class_Scheduling_Export_Package_v2_8_2.zip',mime='application/zip',type='primary')
     st.subheader('5. Email Drafts (Optional)')
     _,_,_,route=config_frames(st.session_state.config_bytes); em,mc,mm=email_drafts(req,route); st.download_button(f'Download Email Drafts ({mc} manager / {mm} manual)',em,'Email_Drafts.zip',mime='application/zip')

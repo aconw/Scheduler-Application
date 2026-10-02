@@ -1,8 +1,8 @@
-# Class Scheduling Batch Tool — Simplified v2.8.1
+# Class Scheduling Batch Tool — Simplified v2.8.2
 
 This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
 
-## v2.8.1 changes
+## v2.8.2 changes
 
 ### Scheduling selection order
 Within each staffing event, hard prerequisites are processed first. After dependency order is satisfied:
@@ -42,3 +42,7 @@ The packaged configuration is the current user-supplied workbook, including the 
 
 ## Run workflow
 Upload the New Hire and/or Job Change report, Training History, Available Sessions, and Existing Orientation Schedule. Confirm preflight validation, run scheduling, and download the results package.
+
+
+## v2.8.2 — Training documentation status
+Every canonical staffing event is checked for active Training Rules matching Job Code + Cost Center. Events with no matching documentation are explicitly reported as `NO_TRAINING_DOCUMENTATION_FOUND`; they are not silently omitted or treated as having no training requirement. See the Training Documentation Status section in the app and worksheet in the audit export.
