@@ -1,48 +1,10 @@
-# Class Scheduling Batch Tool — Simplified v2.8.2
+# Class Scheduling Batch Tool — Simplified v2.8.3
 
-This is a stateless Streamlit batch scheduler. It does not use SQLite and does not include an approve/deny workflow.
+Stateless Streamlit batch scheduler. No approval/deny workflow.
 
-## v2.8.2 changes
+## v2.8.3 — Job Change completion exemption after separation
+The Job Change report's `Last Separation Date` is now read. For `JOB_CHANGE` events, a previous/equivalent completion can exempt the employee only when the completion date is strictly later than the last separation date. Blank separation date means no prior separation, so the prior completion behavior is unchanged. A completion on or before the separation date does not exempt the job change and the requirement continues through normal scheduling.
 
-### Scheduling selection order
-Within each staffing event, hard prerequisites are processed first. After dependency order is satisfied:
+The Requirement Audit retains `Last_Separation_Date`, `Completion_Date`, and the explanation.
 
-1. `TARGET_RANGE`
-2. `FIRST_AVAILABLE`
-3. `FLAG_MANUAL` remains a manual disposition
-
-For `FIRST_AVAILABLE`, the scheduler considers the potential selection date/time. When different FIRST_AVAILABLE requirements have the same potential selection time, the lower numeric `priority` in Training Rules is processed first. Blank priority is lowest.
-
-### Multi-day sessions
-All Available Sessions rows sharing the same WID are one class offering. The scheduler reserves capacity once for the WID and stores every daily interval for conflict detection. The selected result displays the overall start, overall end, and day count.
-
-## Configuration
-`config/Scheduler_Configuration.xlsx` contains:
-- Training Rules
-- Locations
-- Equivalencies
-- Manual Routing
-
-The packaged configuration is the current user-supplied workbook, including the Training Rules `priority` column.
-
-## Existing features retained
-- Candidate Position ID = Job Code for new hires.
-- WID is the preferred durable person identifier.
-- Duplicate source staffing events are collapsed before requirement generation.
-- Historical completion permanently satisfies a requirement.
-- Directional ONE_WAY/TWO_WAY equivalencies apply to completion and active-enrollment suppression.
-- Existing active Workday training is displayed and blocks overlapping selections.
-- Physical sessions are preferred to virtual; nearest eligible physical location is selected within 130 miles.
-- Seats are reserved during the run.
-- Prerequisites are scheduled earlier and may be chained.
-- Employee sessions may not overlap.
-- Employee and contingent worker Workday files remain separate.
-- Requirement Audit and review/audit sheets remain in the exported package.
-- Email drafts remain optional and are not sent automatically.
-
-## Run workflow
-Upload the New Hire and/or Job Change report, Training History, Available Sessions, and Existing Orientation Schedule. Confirm preflight validation, run scheduling, and download the results package.
-
-
-## v2.8.2 — Training documentation status
-Every canonical staffing event is checked for active Training Rules matching Job Code + Cost Center. Events with no matching documentation are explicitly reported as `NO_TRAINING_DOCUMENTATION_FOUND`; they are not silently omitted or treated as having no training requirement. See the Training Documentation Status section in the app and worksheet in the audit export.
+All other scheduler behavior is retained from v2.8.2.

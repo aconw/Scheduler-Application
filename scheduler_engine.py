@@ -83,6 +83,7 @@ HEADER_ALIASES={
 'candidate position id':{'candidate position id'},
 'effective date':{'effective date','position effective date','staffing event effective date'},
 'job code - proposed':{'job code - proposed','proposed job code','job code proposed'},
+'last separation date':{'last separation date','separation date','last termination date'},
 }
 
 def _header_matches(v,canonical):
@@ -197,7 +198,7 @@ def _group_sessions(raw):
 def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules_df,locations_df,equivalencies_df=None,orientation_file=None):
     if rules_df is None or rules_df.empty: raise ValueError('Training configuration is empty.')
     nh=read_sheet(new_hire_file,['Employee ID','WID','Hire Date','Candidate Cost Center ID'],['Candidate Position ID','Worker','Worker Type','Traveler Designation','New Hire Position Title','Candidate Department Name','Supervisory Organization ID','Worker Physical Location','Hiring Manager AD (Username)','Email - Primary Work','Email - Primary Home']) if new_hire_file else []
-    jc=read_sheet(job_change_file,['Employee ID','WID','Effective Date','Job Code - Proposed'],['Worker','Worker Type','Job Title - Proposed','Cost Center ID - Requested','Cost Center - Proposed','Sup Org ID - Requested','Location - Proposed','Hiring Manager AD (Username)','Candidate Email']) if job_change_file else []
+    jc=read_sheet(job_change_file,['Employee ID','WID','Effective Date','Job Code - Proposed'],['Worker','Worker Type','Job Title - Proposed','Cost Center ID - Requested','Cost Center - Proposed','Sup Org ID - Requested','Location - Proposed','Hiring Manager AD (Username)','Candidate Email','Last Separation Date']) if job_change_file else []
     history=read_sheet(history_file,['Employee ID','Record Learning Content','Record Completion Status'],['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date'])
     sessions_raw=read_sheet(sessions_file,['Learning Content Type','Title','Reference ID','Start Date','End Date','Available Seats','WID'],['Availability Status','Locations'])
     orientation=read_sheet(orientation_file,['Employee ID','Enrolled Course Offering','Registration Status','Start Date','End Date'],['WID','Locations','Reference ID','Course Offering']) if orientation_file else []
@@ -220,10 +221,10 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
     events=[]
     for i,r in enumerate(nh,1):
         eid=id_norm(r.get('Employee ID')); sw=id_norm(r.get('WID'))
-        events.append({'Event_Key':f'NH-{i}-{eid}','Event_Type':'NEW_HIRE','Employee_ID':eid,'WID':emp_hist_wid.get(eid,sw),'Source_WID':sw,'Worker_Name':clean(r.get('Worker')),'Worker_Type':clean(r.get('Worker Type')),'Traveler_Designation':clean(r.get('Traveler Designation')),'Anchor_Date':dt(r.get('Hire Date')),'Job_Code':clean(r.get('Candidate Position ID')),'Position_Title':clean(r.get('New Hire Position Title')),'Cost_Center_ID':clean(r.get('Candidate Cost Center ID')),'Cost_Center_Title':clean(r.get('Candidate Department Name')),'Sup_Org_ID':clean(r.get('Supervisory Organization ID')),'Physical_Location':clean(r.get('Worker Physical Location')),'Hiring_Manager_AD':clean(r.get('Hiring Manager AD (Username)')),'Work_Email':clean(r.get('Email - Primary Work')),'Home_Email':clean(r.get('Email - Primary Home'))})
+        events.append({'Event_Key':f'NH-{i}-{eid}','Event_Type':'NEW_HIRE','Employee_ID':eid,'WID':emp_hist_wid.get(eid,sw),'Source_WID':sw,'Worker_Name':clean(r.get('Worker')),'Worker_Type':clean(r.get('Worker Type')),'Traveler_Designation':clean(r.get('Traveler Designation')),'Anchor_Date':dt(r.get('Hire Date')),'Last_Separation_Date':None,'Job_Code':clean(r.get('Candidate Position ID')),'Position_Title':clean(r.get('New Hire Position Title')),'Cost_Center_ID':clean(r.get('Candidate Cost Center ID')),'Cost_Center_Title':clean(r.get('Candidate Department Name')),'Sup_Org_ID':clean(r.get('Supervisory Organization ID')),'Physical_Location':clean(r.get('Worker Physical Location')),'Hiring_Manager_AD':clean(r.get('Hiring Manager AD (Username)')),'Work_Email':clean(r.get('Email - Primary Work')),'Home_Email':clean(r.get('Email - Primary Home'))})
     for i,r in enumerate(jc,1):
         eid=id_norm(r.get('Employee ID')); sw=id_norm(r.get('WID'))
-        events.append({'Event_Key':f'JC-{i}-{eid}','Event_Type':'JOB_CHANGE','Employee_ID':eid,'WID':emp_hist_wid.get(eid,sw),'Source_WID':sw,'Worker_Name':clean(r.get('Worker')),'Worker_Type':clean(r.get('Worker Type')),'Traveler_Designation':'','Anchor_Date':dt(r.get('Effective Date')),'Job_Code':clean(r.get('Job Code - Proposed')),'Position_Title':clean(r.get('Job Title - Proposed')),'Cost_Center_ID':clean(r.get('Cost Center ID - Requested')),'Cost_Center_Title':clean(r.get('Cost Center - Proposed')),'Sup_Org_ID':clean(r.get('Sup Org ID - Requested')),'Physical_Location':clean(r.get('Location - Proposed')),'Hiring_Manager_AD':clean(r.get('Hiring Manager AD (Username)')),'Work_Email':clean(r.get('Candidate Email')),'Home_Email':''})
+        events.append({'Event_Key':f'JC-{i}-{eid}','Event_Type':'JOB_CHANGE','Employee_ID':eid,'WID':emp_hist_wid.get(eid,sw),'Source_WID':sw,'Worker_Name':clean(r.get('Worker')),'Worker_Type':clean(r.get('Worker Type')),'Traveler_Designation':'','Anchor_Date':dt(r.get('Effective Date')),'Last_Separation_Date':dt(r.get('Last Separation Date')),'Job_Code':clean(r.get('Job Code - Proposed')),'Position_Title':clean(r.get('Job Title - Proposed')),'Cost_Center_ID':clean(r.get('Cost Center ID - Requested')),'Cost_Center_Title':clean(r.get('Cost Center - Proposed')),'Sup_Org_ID':clean(r.get('Sup Org ID - Requested')),'Physical_Location':clean(r.get('Location - Proposed')),'Hiring_Manager_AD':clean(r.get('Hiring Manager AD (Username)')),'Work_Email':clean(r.get('Candidate Email')),'Home_Email':''})
     for e in events:
         e['Person_Key']=person_key(e['WID'],e['Employee_ID'])
         e['Contingent_Action']='STANDARD SCHEDULE' if norm(e['Worker_Type'])!='contingent worker' else ('STANDARD SCHEDULE' if norm(e['Traveler_Designation'])=='trav i' else ('ESCALATE' if norm(e['Traveler_Designation'])=='trav d' else 'NO SCHEDULE'))
@@ -288,7 +289,7 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         documentation_status.append({
             'Event_Key':e['Event_Key'],'Event_Type':e['Event_Type'],'Employee_ID':e['Employee_ID'],'WID':e['WID'],
             'Person_Key':e['Person_Key'],'Worker_Name':e['Worker_Name'],'Worker_Type':e['Worker_Type'],
-            'Anchor_Date':e['Anchor_Date'],'Job_Code':e['Job_Code'],'Position_Title':e['Position_Title'],
+            'Anchor_Date':e['Anchor_Date'],'Last_Separation_Date':e.get('Last_Separation_Date'),'Job_Code':e['Job_Code'],'Position_Title':e['Position_Title'],
             'Cost_Center_ID':e['Cost_Center_ID'],'Cost_Center_Title':e['Cost_Center_Title'],'Sup_Org_ID':e['Sup_Org_ID'],
             'Physical_Location':e['Physical_Location'],'Training_Documentation_Status':doc_status,
             'Matching_Active_Rule_Count':len(candidates),'Documentation_Explanation':doc_explanation,
@@ -315,14 +316,28 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         r.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Existing_Enrollment_Training':'','Equivalency_Used':'','Equivalency_Direction':'','Equivalency_Match_Direction':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Selected_Day_Count':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         satisfying_titles=satisfying(r['Training_Title']); person_hist=hist_by_person.get(r['Person_Key'],[])
         completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and norm(h.get('Record Completion Status'))=='completed']
-        if completed:
-            h=max(completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min); observed=clean(h.get('Record Learning Content')); r['Disposition']='PREVIOUSLY_COMPLETED' if norm(observed)==norm(r['Training_Title']) else 'EQUIVALENT_COMPLETION'; r['Completion_Date']=h.get('Record Completion Date'); r['Completion_Training']=observed
+        separation_date=r.get('Last_Separation_Date') if r.get('Event_Type')=='JOB_CHANGE' else None
+        if separation_date:
+            eligible_completed=[h for h in completed if (dt(h.get('Record Completion Date')) is not None and dt(h.get('Record Completion Date')) > separation_date)]
+            ineligible_completed=[h for h in completed if dt(h.get('Record Completion Date')) is not None and dt(h.get('Record Completion Date')) <= separation_date]
+        else:
+            eligible_completed=completed; ineligible_completed=[]
+        if eligible_completed:
+            h=max(eligible_completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min); observed=clean(h.get('Record Learning Content')); r['Disposition']='PREVIOUSLY_COMPLETED' if norm(observed)==norm(r['Training_Title']) else 'EQUIVALENT_COMPLETION'; r['Completion_Date']=h.get('Record Completion Date'); r['Completion_Training']=observed
             em=eq_meta.get((norm(r['Training_Title']),norm(observed)))
             if em:
                 r['Equivalency_Used']=f"{em['required']} <-> {em['equivalent']}" if em['direction']=='TWO_WAY' else f"{em['equivalent']} -> {em['required']}"; r['Equivalency_Direction']=em['direction']; r['Equivalency_Match_Direction']='FORWARD' if em['forward'] else 'REVERSE'; r['Explanation']=f"Historical completion of '{observed}' satisfies '{r['Training_Title']}' via {em['direction']} equivalency." 
-            else: r['Explanation']='Historical completion satisfies requirement. No reassignment required.'
+                if separation_date: r['Explanation'] += f" Completion ({dt(r['Completion_Date']):%m/%d/%Y}) occurred after last separation date ({separation_date:%m/%d/%Y})."
+            else:
+                r['Explanation']='Historical completion satisfies requirement. No reassignment required.'
+            if separation_date and not em:
+                r['Explanation'] += f" Completion ({dt(r['Completion_Date']):%m/%d/%Y}) occurred after last separation date ({separation_date:%m/%d/%Y})."
             continue
         enr=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and norm(h.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
+        if ineligible_completed:
+            r['Completion_Training']=clean(max(ineligible_completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min).get('Record Learning Content'))
+            r['Completion_Date']=max(ineligible_completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min).get('Record Completion Date')
+            r['Explanation']=f"Historical completion does not exempt this job change because it was completed on/before the last separation date ({separation_date:%m/%d/%Y}). A qualifying completion must be after the last separation date."
         enr2=[o for o in existing_by_person.get(r['Person_Key'],[]) if norm(o['Training_Title']) in satisfying_titles]
         if enr or enr2:
             observed=''; start=None
@@ -334,8 +349,11 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
             em=eq_meta.get((norm(r['Training_Title']),norm(observed)))
             if em:
                 r['Equivalency_Used']=f"{em['required']} <-> {em['equivalent']}" if em['direction']=='TWO_WAY' else f"{em['equivalent']} -> {em['required']}"; r['Equivalency_Direction']=em['direction']; r['Equivalency_Match_Direction']='FORWARD' if em['forward'] else 'REVERSE'; r['Explanation']=f"Existing active enrollment in '{observed}' satisfies '{r['Training_Title']}' via {em['direction']} equivalency. Duplicate enrollment suppressed."
-            else: r['Explanation']='Existing active registration found. Duplicate enrollment suppressed.'
+            else:
+                r['Explanation'] = (r.get('Explanation','') + ' Existing active registration found. Duplicate enrollment suppressed.').strip()
             continue
+        if ineligible_completed and not enr and not enr2:
+            r['Explanation'] = (r.get('Explanation','') + ' Training will be scheduled because the prior completion occurred on/before the last separation date.').strip()
         p=norm(r['Scheduling_Policy'])
         if p=='flag_manual': r['Disposition']='MANUAL_SCHEDULING_REQUIRED'; r['Explanation']='Training rule uses FLAG_MANUAL.'; continue
         if not p: r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Training rule has no scheduling policy.'; continue
@@ -509,11 +527,11 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         reservations.append({'Session_WID':chosen['WID'],'Training_Title':chosen['Title'],'Start_Date':chosen['start'],'End_Date':chosen['end'],'Day_Count':chosen['day_count'],'Location':chosen['Locations'] or 'Virtual','Employee_ID':r['Employee_ID'],'WID':r['WID'],'Person_Key':r['Person_Key'],'Event_Key':r['Event_Key'],'Seats_Before':session_capacity[chosen['WID']]-seat_used[chosen['WID']]+1,'Seats_After':session_capacity[chosen['WID']]-seat_used[chosen['WID']]})
     for r in reqs:
         if r['Disposition']=='PENDING_SCHEDULING': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Scheduling engine could not resolve this requirement.'
-    req_cols=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Documentation_Status','Rule_ID','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Priority','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
+    req_cols=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Traveler_Designation','Anchor_Date','Last_Separation_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Hiring_Manager_AD','Work_Email','Home_Email','Training_Documentation_Status','Rule_ID','Training_Title','Prerequisite','Topic','Scheduling_Policy','Timing_Modifier','Timing_Min','Timing_Max','Priority','Completion_Date','Completion_Training','Existing_Registration_Date','Existing_Session_Start','Existing_Enrollment_Training','Equivalency_Used','Equivalency_Direction','Equivalency_Match_Direction','Selected_Session_WID','Selected_Reference_ID','Selected_Start','Selected_End','Selected_Location','Selected_Day_Count','Distance_Miles','Original_Available_Seats','Remaining_Seats_After_Reservation','Prerequisite_Status','Prerequisite_Scheduled_Start','Conflict_Detail','Satisfied_By_Event_Key','Satisfied_By_Session_WID','Disposition','Explanation','Workday_Ready','Override','Override_Reason']
     reqdf=pd.DataFrame(reqs,columns=req_cols)
     evdf=pd.DataFrame(events)
     exdf=pd.DataFrame(existing_by_person and sum(existing_by_person.values(),[]) or [],columns=['Person_Key','WID','Employee_ID','Training_Title','Registration_Status','Start_Date','End_Date','Location','Required_For_Current_Role','Scheduling_Impact'])
     rdf=pd.DataFrame(reservations)
-    docdf=pd.DataFrame(documentation_status,columns=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Training_Documentation_Status','Matching_Active_Rule_Count','Documentation_Explanation'])
+    docdf=pd.DataFrame(documentation_status,columns=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Last_Separation_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Training_Documentation_Status','Matching_Active_Rule_Count','Documentation_Explanation'])
     no_doc_count=int((docdf['Training_Documentation_Status']=='NO_TRAINING_DOCUMENTATION_FOUND').sum()) if not docdf.empty else 0
     return {'events':evdf,'duplicate_events':pd.DataFrame(duplicate),'training_documentation_status':docdf,'requirements':reqdf,'existing_workday':exdf,'sessions':pd.DataFrame(sessions),'seat_reservations':rdf,'summary':dict(Counter(reqdf['Disposition'])) if not reqdf.empty else {},'source_counts':{'new_hires':len(nh),'job_changes':len(jc),'staffing_events_raw':len(nh)+len(jc),'staffing_events_canonical':len(events),'duplicate_source_events':len(duplicate),'training_documentation_found':len(docdf)-no_doc_count,'no_training_documentation_found':no_doc_count,'history':len(history),'sessions':len(sessions),'session_day_rows':len(sessions_raw)}}

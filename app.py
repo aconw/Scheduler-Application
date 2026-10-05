@@ -14,7 +14,7 @@ ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuratio
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.8.2 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
+st.caption('Simplified stateless build v2.8.3 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
 
 
 def raw_bytes(upload):
@@ -148,7 +148,7 @@ if st.session_state.result is not None:
     no_doc=int((doc['Training_Documentation_Status']=='NO_TRAINING_DOCUMENTATION_FOUND').sum()) if not doc.empty else 0
     cols=st.columns(8); metrics=[('Requirements',len(req)),('Selected',counts.get('PROPOSED_SCHEDULE',0)),('Same-run satisfied',counts.get('SATISFIED_BY_SAME_RUN_ASSIGNMENT',0)),('Duplicate source events',dup),('No training documentation',no_doc),('Review',counts.get('REVIEW_REQUIRED',0)),('Manual',counts.get('MANUAL_SCHEDULING_REQUIRED',0)),('Already enrolled',counts.get('ALREADY_ENROLLED',0))]
     for c,(lab,v) in zip(cols,metrics): c.metric(lab,v)
-    st.dataframe(req[['Worker_Name','Employee_ID','Event_Type','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation']][[c for c in ['Worker_Name','Employee_ID','Event_Type','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation'] if c in req.columns]],use_container_width=True,height=430)
+    st.dataframe(req[['Worker_Name','Employee_ID','Event_Type','Last_Separation_Date','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation']][[c for c in ['Worker_Name','Employee_ID','Event_Type','Last_Separation_Date','Training_Title','Priority','Scheduling_Policy','Selected_Session_WID','Selected_Start','Selected_End','Selected_Day_Count','Selected_Location','Distance_Miles','Disposition','Explanation'] if c in req.columns]],use_container_width=True,height=430)
     st.markdown('### Training Documentation Status')
     st.caption("Every canonical staffing event is shown. NO_TRAINING_DOCUMENTATION_FOUND means no active Training Rules matched that event's Job Code + Cost Center; the application does not interpret that as no training required.")
     if not doc.empty:
