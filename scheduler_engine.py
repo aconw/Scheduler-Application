@@ -298,11 +298,28 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         if norm(e['Contingent_Action'])=='no schedule': continue
         for rr in candidates:
             title=clean(rr.get('training_title'))
-            if clean(rr.get('supervisory_org')) and norm(rr.get('supervisory_org'))!=norm(e['Sup_Org_ID']): continue
             key=(e['Event_Key'],norm(title))
             if key in seen: continue
             seen.add(key)
             reqs.append({**e,'Rule_ID':rr.get('id'),'Training_Title':title,'Prerequisite':clean(rr.get('prerequisite')),'Topic':clean(rr.get('topic')),'Scheduling_Policy':clean(rr.get('scheduling_policy')),'Timing_Modifier':clean(rr.get('timing_modifier')),'Timing_Min':rr.get('timing_min'),'Timing_Max':rr.get('timing_max'),'Priority':rr.get('priority')})
+
+    # Event-level safeguard: eligible staffing events with documented rules must
+    # never disappear from both the requirements audit and the review queue.
+    generated_counts=Counter(r['Event_Key'] for r in reqs)
+    event_review=[]
+    for e, status in zip(events, documentation_status):
+        count=generated_counts[e['Event_Key']]
+        status['Generated_Requirement_Count']=count
+        if norm(e['Contingent_Action'])=='no schedule':
+            continue  # Explicit worker-type exclusion is not a missing-rule error.
+        if status['Matching_Active_Rule_Count'] and count==0:
+            explanation=('Training documentation exists but no requirements were generated '
+                         'for this eligible staffing event. Investigate rule processing.')
+            status['Documentation_Explanation']=explanation
+            event_review.append({**e,'Training_Title':'','Rule_ID':'',
+                'Disposition':'REVIEW_REQUIRED','Explanation':explanation,
+                'Training_Documentation_Status':status['Training_Documentation_Status'],
+                'Workday_Ready':'No','Override':'No','Override_Reason':''})
 
     # Existing Workday training is visible for the employee whether or not it is a requirement.
     person_req_titles=defaultdict(set)
@@ -534,4 +551,4 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
     rdf=pd.DataFrame(reservations)
     docdf=pd.DataFrame(documentation_status,columns=['Event_Key','Event_Type','Employee_ID','WID','Person_Key','Worker_Name','Worker_Type','Anchor_Date','Last_Separation_Date','Job_Code','Position_Title','Cost_Center_ID','Cost_Center_Title','Sup_Org_ID','Physical_Location','Training_Documentation_Status','Matching_Active_Rule_Count','Documentation_Explanation'])
     no_doc_count=int((docdf['Training_Documentation_Status']=='NO_TRAINING_DOCUMENTATION_FOUND').sum()) if not docdf.empty else 0
-    return {'events':evdf,'duplicate_events':pd.DataFrame(duplicate),'training_documentation_status':docdf,'requirements':reqdf,'existing_workday':exdf,'sessions':pd.DataFrame(sessions),'seat_reservations':rdf,'summary':dict(Counter(reqdf['Disposition'])) if not reqdf.empty else {},'source_counts':{'new_hires':len(nh),'job_changes':len(jc),'staffing_events_raw':len(nh)+len(jc),'staffing_events_canonical':len(events),'duplicate_source_events':len(duplicate),'training_documentation_found':len(docdf)-no_doc_count,'no_training_documentation_found':no_doc_count,'history':len(history),'sessions':len(sessions),'session_day_rows':len(sessions_raw)}}
+    return {'events':evdf,'duplicate_events':pd.DataFrame(duplicate),'training_documentation_status':docdf,'requirements':reqdf,'event_review':pd.DataFrame(event_review),'existing_workday':exdf,'sessions':pd.DataFrame(sessions),'seat_reservations':rdf,'summary':dict(Counter(reqdf['Disposition'])) if not reqdf.empty else {},'source_counts':{'new_hires':len(nh),'job_changes':len(jc),'staffing_events_raw':len(nh)+len(jc),'staffing_events_canonical':len(events),'duplicate_source_events':len(duplicate),'training_documentation_found':len(docdf)-no_doc_count,'no_training_documentation_found':no_doc_count,'history':len(history),'sessions':len(sessions),'session_day_rows':len(sessions_raw)}}
