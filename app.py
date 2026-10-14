@@ -14,7 +14,7 @@ ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuratio
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Mission: Possible | Class Scheduling')
-st.caption('v2.8.4 • Making Complex Scheduling Look Easy | Behind every great beginning is a team transforming challenges into opportunities and preparation into confidence—empowering our employees to do what they do best: care for others.')
+st.caption('v2.8.4 • Making Complex Scheduling Look Easy • Behind every great beginning is a team transforming challenges into opportunities and preparation into confidence—empowering our employees to do what they do best: care for others.')
 
 
 def raw_bytes(upload):
