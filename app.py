@@ -150,7 +150,7 @@ a,b=st.columns(2)
 with a:
     nh=st.file_uploader('New Hire Orientation Report (RPT-2277)',type=['xlsx'],key='nh'); jc=st.file_uploader('New / Additional Job Change Report (RPT-2278)',type=['xlsx'],key='jc')
 with b:
-    hist=st.file_uploader('Training History / Learning Transcript',type=['xlsx'],key='hist'); sess=st.file_uploader('Learning Content / Available Sessions',type=['xlsx'],key='sess'); orient=st.file_uploader('Existing Orientation Schedule — required for conflict checking',type=['xlsx'],key='orient')
+    hist=st.file_uploader('Training History | LRN - Learning Transcript Report',type=['xlsx'],key='hist'); sess=st.file_uploader('Available Sessions | Learning Content IDs (LRN - RPT-2208)',type=['xlsx'],key='sess'); orient=st.file_uploader('Existing Orientation Schedule | Orientation Schedule Report - Lesson-Level Detail',type=['xlsx'],key='orient')
 raw={k:raw_bytes(v) for k,v in {'nh':nh,'jc':jc,'hist':hist,'sess':sess,'orient':orient}.items()}
 
 st.subheader('2. Preflight Validation')
