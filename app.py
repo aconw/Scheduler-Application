@@ -14,7 +14,7 @@ ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuratio
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.8.4 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
+st.caption('Simplified stateless build v2.8.4 • Geoff and Amanda are awesome • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
 
 
 def raw_bytes(upload):
