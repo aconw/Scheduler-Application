@@ -8,13 +8,13 @@ import pandas as pd
 import openpyxl
 import streamlit as st
 
-from scheduler_engine import run_scheduler, read_sheet, norm, clean, _header_matches
+from scheduler_engine import run_scheduler, read_sheet, norm, clean
 
 ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'; ASSETS=ROOT/'assets'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
 st.title('Class Scheduling Batch Tool')
-st.caption('Simplified stateless build v2.8.4 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
+st.caption('Simplified stateless build v2.8.3 • Training documentation status • TARGET_RANGE first • FIRST_AVAILABLE priority ranking • Multi-day session aware')
 
 
 def raw_bytes(upload):
@@ -38,44 +38,13 @@ def config_frames(raw=None):
     if 'relationship_direction' not in eq.columns: eq['relationship_direction']='ONE_WAY'
     return rules,loc,eq,route
 
-@st.cache_data(show_spinner=False, max_entries=20)
-def _preflight_cached(raw, required):
-    # Stream each worksheet once; avoid constructing all row dictionaries and
-    # opening the same workbook a second time just to display its dimensions.
-    wb=openpyxl.load_workbook(BytesIO(raw),read_only=True,data_only=True)
-    try:
-        selected=None; best=(0,None,None,[]); sheets=[]
-        for ws in wb.worksheets:
-            # Workday occasionally declares A1:A1 as its used range.
-            # Resetting dimensions prevents read-only mode from losing data.
-            ws.reset_dimensions()
-            row_count=0; max_col=0; sheet_rows=0
-            for i,row in enumerate(ws.iter_rows(values_only=True),1):
-                sheet_rows=i
-                max_col=max(max_col,len(row))
-                if i<=150 and selected is None:
-                    missing=[h for h in required if not any(_header_matches(v,h) for v in row)]
-                    matched=len(required)-len(missing)
-                    if matched>best[0]: best=(matched,ws.title,i,missing)
-                    if not missing:
-                        selected=(ws.title,i)
-                if selected and selected[0]==ws.title and i>selected[1] and any(v not in (None,'') for v in row):
-                    row_count+=1
-            sheets.append(f'{ws.title} ({sheet_rows:,}x{max_col:,})')
-            if selected and selected[0]==ws.title:
-                break
-        if selected is None:
-            n,sh,ri,missing=best
-            raise ValueError(f'Could not recognize report. Expected {required}; best match worksheet={sh}, row={ri}, matched {n}/{len(required)}, missing={missing}.')
-        return f'{len(raw):,} bytes • {"; ".join(sheets)} • {row_count:,} data rows',row_count
-    finally:
-        wb.close()
-
 def validate(label,raw,required,optional=None):
     if raw is None:return (False,'Not uploaded',0)
     try:
-        detail,count=_preflight_cached(raw,tuple(required))
-        return True,detail,count
+        rows=read_sheet(raw,required,optional or [])
+        wb=openpyxl.load_workbook(BytesIO(raw),read_only=False,data_only=True)
+        sheets=[f'{ws.title} ({ws.max_row:,}x{ws.max_column:,})' for ws in wb.worksheets]
+        return True,f'{len(raw):,} bytes • {"; ".join(sheets)} • {len(rows):,} data rows',len(rows)
     except Exception as e:return False,str(e),0
 
 def workday_export(req,contingent=False):
