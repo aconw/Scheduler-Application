@@ -13,8 +13,8 @@ from scheduler_engine import run_scheduler, read_sheet, norm, clean, _header_mat
 ROOT=Path(__file__).parent; CONFIG_DEFAULT=ROOT/'config'/'Scheduler_Configuration.xlsx'; ASSETS=ROOT/'assets'
 
 st.set_page_config(page_title='Class Scheduling Batch Tool',page_icon='📚',layout='wide')
-st.title('Class Scheduling Batch Tool')
-st.caption('v2.8.4 • Behind every great beginning is a team transforming challenges into opportunities and preparation into confidence—empowering our employees to do what they do best: care for others.')
+st.title('Mission: Possible | Class Scheduling')
+st.caption('v2.8.4 • Making Complex Scheduling Look Easy | Behind every great beginning is a team transforming challenges into opportunities and preparation into confidence—empowering our employees to do what they do best: care for others.')
 
 
 def raw_bytes(upload):
