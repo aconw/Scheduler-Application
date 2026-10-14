@@ -148,7 +148,7 @@ with st.expander('Configuration',expanded=False):
 st.subheader('1. Upload Workday Reports')
 a,b=st.columns(2)
 with a:
-    nh=st.file_uploader('New Hire Orientation Report',type=['xlsx'],key='nh'); jc=st.file_uploader('New / Additional Job Change Report',type=['xlsx'],key='jc')
+    nh=st.file_uploader('New Hire Orientation Report (RPT-2277)',type=['xlsx'],key='nh'); jc=st.file_uploader('New / Additional Job Change Report (RPT-2278)',type=['xlsx'],key='jc')
 with b:
     hist=st.file_uploader('Training History / Learning Transcript',type=['xlsx'],key='hist'); sess=st.file_uploader('Learning Content / Available Sessions',type=['xlsx'],key='sess'); orient=st.file_uploader('Existing Orientation Schedule — required for conflict checking',type=['xlsx'],key='orient')
 raw={k:raw_bytes(v) for k,v in {'nh':nh,'jc':jc,'hist':hist,'sess':sess,'orient':orient}.items()}
