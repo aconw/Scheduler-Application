@@ -138,8 +138,10 @@ def overlap(a_start,a_end,b_start,b_end):
     return a_start < b_end and a_end > b_start
 
 def person_key(wid,eid):
-    wid=id_norm(wid); eid=id_norm(eid)
-    return f'WID:{wid}' if wid else f'EID:{eid}'
+    # Employee ID is the sole matching key for staffing events, transcript
+    # records, and existing enrollments. WID remains informational only.
+    eid=id_norm(eid)
+    return f'EID:{eid}' if eid else ''
 
 def _priority(v):
     try:
@@ -236,6 +238,8 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         eid=id_norm(r.get('Employee ID')); sw=id_norm(r.get('WID'))
         events.append({'Event_Key':f'JC-{i}-{eid}','Event_Type':'JOB_CHANGE','Employee_ID':eid,'WID':emp_hist_wid.get(eid,sw),'Source_WID':sw,'Worker_Name':clean(r.get('Worker')),'Worker_Type':clean(r.get('Worker Type')),'Traveler_Designation':'','Anchor_Date':dt(r.get('Effective Date')),'Last_Separation_Date':dt(r.get('Last Separation Date')),'Job_Code':clean(r.get('Job Code - Proposed')),'Position_Title':clean(r.get('Job Title - Proposed')),'Cost_Center_ID':clean(r.get('Cost Center ID - Requested')),'Cost_Center_Title':clean(r.get('Cost Center - Proposed')),'Sup_Org_ID':clean(r.get('Sup Org ID - Requested')),'Physical_Location':clean(r.get('Location - Proposed')),'Hiring_Manager_AD':clean(r.get('Hiring Manager AD (Username)')),'Work_Email':clean(r.get('Candidate Email')),'Home_Email':''})
     for e in events:
+        if not e['Employee_ID']:
+            raise ValueError('Staffing event is missing Employee ID; cannot safely match enrollments or reserve seats.')
         e['Person_Key']=person_key(e['WID'],e['Employee_ID'])
         e['Contingent_Action']='STANDARD SCHEDULE' if norm(e['Worker_Type'])!='contingent worker' else ('STANDARD SCHEDULE' if norm(e['Traveler_Designation'])=='trav i' else ('ESCALATE' if norm(e['Traveler_Designation'])=='trav d' else 'NO SCHEDULE'))
     # Duplicate source-event collapse retained.
@@ -262,14 +266,17 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
     def satisfying(title): return {norm(title)}|set(eq.get(norm(title),set()))
 
     hist_by_person=defaultdict(list)
-    for h in history: hist_by_person[person_key(emp_hist_wid.get(id_norm(h.get('Employee ID')),id_norm(h.get('WID'))),id_norm(h.get('Employee ID')))].append(h)
+    for h in history:
+        pk=person_key(None,h.get('Employee ID'))
+        if pk: hist_by_person[pk].append(h)
     existing_by_person=defaultdict(list); existing_unique=set()
     busy=defaultdict(list)
     for o in orientation:
         if norm(o.get('Registration Status')) not in ACTIVE_REGISTRATION_STATUSES: continue
         st=dt(o.get('Start Date')); en=dt(o.get('End Date'))
         if not st or not en or en<=st: continue
-        eid=id_norm(o.get('Employee ID')); wid=emp_hist_wid.get(eid,id_norm(o.get('WID'))); pk=person_key(wid,eid); title=clean(o.get('Enrolled Course Offering'))
+        eid=id_norm(o.get('Employee ID')); wid=emp_hist_wid.get(eid,id_norm(o.get('WID'))); pk=person_key(None,eid); title=clean(o.get('Enrolled Course Offering'))
+        if not pk: continue
         ok=(pk,norm(title),st,en)
         if ok in existing_unique: continue
         existing_unique.add(ok)
