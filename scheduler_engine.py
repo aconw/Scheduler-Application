@@ -66,6 +66,7 @@ HEADER_ALIASES={
 'learning participant':{'learning participant','learner','learner name','learning participant name'},
 'record learning content':{'record learning content','learning content','learning content title','record learning content title'},
 'record completion status':{'record completion status','completion status','learning completion status'},
+'record grade':{'record grade'},
 'record completion date':{'record completion date','completion date','completed date','completed on'},
 'registration status':{'registration status','learner registration status'},
 "learner's registration date":{'learner\'s registration date','learners registration date','registration date'},
@@ -195,11 +196,20 @@ def _group_sessions(raw):
         out.append({'WID':wid,'Title':title,'Reference ID':ref,'Availability Status':status,'Available Seats':min(seats) if seats else 0,'Locations':Counter(locs).most_common(1)[0][0] if locs else '','days':days,'start':min(d['start'] for d in days),'end':max(d['end'] for d in days),'day_count':len(days)})
     return out
 
+def is_failed_assessment(h):
+    # Only an explicit failed grade overrides Workday's Completed status.
+    # Blank or ungraded learning retains the existing completion behavior.
+    return norm(h.get('Record Grade')) in {'fail', 'failed'}
+
+
+def is_creditable_completion(h):
+    return norm(h.get('Record Completion Status')) == 'completed' and not is_failed_assessment(h)
+
 def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules_df,locations_df,equivalencies_df=None,orientation_file=None):
     if rules_df is None or rules_df.empty: raise ValueError('Training configuration is empty.')
     nh=read_sheet(new_hire_file,['Employee ID','WID','Hire Date','Candidate Cost Center ID'],['Candidate Position ID','Worker','Worker Type','Traveler Designation','New Hire Position Title','Candidate Department Name','Supervisory Organization ID','Worker Physical Location','Hiring Manager AD (Username)','Email - Primary Work','Email - Primary Home']) if new_hire_file else []
     jc=read_sheet(job_change_file,['Employee ID','WID','Effective Date','Job Code - Proposed'],['Worker','Worker Type','Job Title - Proposed','Cost Center ID - Requested','Cost Center - Proposed','Sup Org ID - Requested','Location - Proposed','Hiring Manager AD (Username)','Candidate Email','Last Separation Date']) if job_change_file else []
-    history=read_sheet(history_file,['Employee ID','Record Learning Content','Record Completion Status'],['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date'])
+    history=read_sheet(history_file,['Employee ID','Record Learning Content','Record Completion Status'],['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date','Record Grade'])
     sessions_raw=read_sheet(sessions_file,['Learning Content Type','Title','Reference ID','Start Date','End Date','Available Seats','WID'],['Availability Status','Locations'])
     orientation=read_sheet(orientation_file,['Employee ID','Enrolled Course Offering','Registration Status','Start Date','End Date'],['WID','Locations','Reference ID','Course Offering']) if orientation_file else []
     sessions=_group_sessions(sessions_raw)
@@ -332,7 +342,9 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
     for r in reqs:
         r.update({'Completion_Date':'','Completion_Training':'','Existing_Registration_Date':'','Existing_Session_Start':'','Existing_Enrollment_Training':'','Equivalency_Used':'','Equivalency_Direction':'','Equivalency_Match_Direction':'','Selected_Session_WID':'','Selected_Reference_ID':'','Selected_Start':'','Selected_End':'','Selected_Location':'','Selected_Day_Count':'','Distance_Miles':'','Original_Available_Seats':'','Remaining_Seats_After_Reservation':'','Prerequisite_Status':'','Prerequisite_Scheduled_Start':'','Conflict_Detail':'','Satisfied_By_Event_Key':'','Satisfied_By_Session_WID':'','Disposition':'','Explanation':'','Workday_Ready':'No','Override':'No','Override_Reason':''})
         satisfying_titles=satisfying(r['Training_Title']); person_hist=hist_by_person.get(r['Person_Key'],[])
-        completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and norm(h.get('Record Completion Status'))=='completed']
+        completed=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and is_creditable_completion(h)]
+        failed_matches=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and is_failed_assessment(h)]
+        if failed_matches: r['Explanation']='FAILED_ASSESSMENT_NO_CREDIT: Failed assessment excluded from direct completion and equivalency credit.'
         separation_date=r.get('Last_Separation_Date') if r.get('Event_Type')=='JOB_CHANGE' else None
         if separation_date:
             eligible_completed=[h for h in completed if (dt(h.get('Record Completion Date')) is not None and dt(h.get('Record Completion Date')) > separation_date)]
@@ -350,7 +362,7 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
             if separation_date and not em:
                 r['Explanation'] += f" Completion ({dt(r['Completion_Date']):%m/%d/%Y}) occurred after last separation date ({separation_date:%m/%d/%Y})."
             continue
-        enr=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and norm(h.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES]
+        enr=[h for h in person_hist if norm(h.get('Record Learning Content')) in satisfying_titles and norm(h.get('Registration Status')) in ACTIVE_REGISTRATION_STATUSES and not is_failed_assessment(h)]
         if ineligible_completed:
             r['Completion_Training']=clean(max(ineligible_completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min).get('Record Learning Content'))
             r['Completion_Date']=max(ineligible_completed,key=lambda x:dt(x.get('Record Completion Date')) or datetime.min).get('Record Completion Date')
@@ -372,7 +384,7 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
         if ineligible_completed and not enr and not enr2:
             r['Explanation'] = (r.get('Explanation','') + ' Training will be scheduled because the prior completion occurred on/before the last separation date.').strip()
         p=norm(r['Scheduling_Policy'])
-        if p=='flag_manual': r['Disposition']='MANUAL_SCHEDULING_REQUIRED'; r['Explanation']='Training rule uses FLAG_MANUAL.'; continue
+        if p=='flag_manual': r['Disposition']='MANUAL_SCHEDULING_REQUIRED'; r['Explanation']=(r.get('Explanation','')+' Training rule uses FLAG_MANUAL.').strip(); continue
         if not p: r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Training rule has no scheduling policy.'; continue
         if norm(r['Contingent_Action'])=='escalate': r['Disposition']='REVIEW_REQUIRED'; r['Explanation']='Contingent worker policy requires escalation.'; continue
         r['Disposition']='PENDING_SCHEDULING'
@@ -469,7 +481,7 @@ def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules
                 elif pr['Disposition'] in ('MANUAL_SCHEDULING_REQUIRED','REVIEW_REQUIRED'): r['Disposition']='REVIEW_REQUIRED'; r['Explanation']=f"Prerequisite '{pr['Training_Title']}' is not in a schedulable state ({pr['Disposition']})."; continue
             else:
                 ph=hist_by_person.get(r['Person_Key'],[]); titles=satisfying(prereq)
-                if any(norm(h.get('Record Learning Content')) in titles and norm(h.get('Record Completion Status'))=='completed' for h in ph): r['Prerequisite_Status']='SATISFIED_BY_PRIOR_COMPLETION'
+                if any(norm(h.get('Record Learning Content')) in titles and is_creditable_completion(h) for h in ph): r['Prerequisite_Status']='SATISFIED_BY_PRIOR_COMPLETION'
                 else:
                     pexisting=[x for x in existing_by_person.get(r['Person_Key'],[]) if norm(x['Training_Title']) in titles]
                     if pexisting: prereq_end=max(x['End_Date'] for x in pexisting); r['Prerequisite_Status']='SATISFIED_BY_EXISTING_ENROLLMENT'; r['Prerequisite_Scheduled_Start']=min(x['Start_Date'] for x in pexisting)
