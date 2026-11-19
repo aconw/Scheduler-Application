@@ -39,7 +39,7 @@ def config_frames(raw=None):
     return rules,loc,eq,route
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def _preflight_cached(raw, required):
+def _preflight_cached(raw, required, *, job_change=False):
     # Stream each worksheet once; avoid constructing all row dictionaries and
     # opening the same workbook a second time just to display its dimensions.
     wb=openpyxl.load_workbook(BytesIO(raw),read_only=True,data_only=True)
@@ -54,7 +54,7 @@ def _preflight_cached(raw, required):
                 sheet_rows=i
                 max_col=max(max_col,len(row))
                 if i<=150 and selected is None:
-                    missing=[h for h in required if not any(_header_matches(v,h) for v in row)]
+                    missing=[h for h in required if not any(_header_matches(v,h,job_change=job_change) for v in row)]
                     matched=len(required)-len(missing)
                     if matched>best[0]: best=(matched,ws.title,i,missing)
                     if not missing:
@@ -71,10 +71,10 @@ def _preflight_cached(raw, required):
     finally:
         wb.close()
 
-def validate(label,raw,required,optional=None):
+def validate(label,raw,required,optional=None,*,job_change=False):
     if raw is None:return (False,'Not uploaded',0)
     try:
-        detail,count=_preflight_cached(raw,tuple(required))
+        detail,count=_preflight_cached(raw,tuple(required),job_change=job_change)
         return True,detail,count
     except Exception as e:return False,str(e),0
 
@@ -156,7 +156,7 @@ raw={k:raw_bytes(v) for k,v in {'nh':nh,'jc':jc,'hist':hist,'sess':sess,'orient'
 st.subheader('2. Preflight Validation')
 checks=[]
 if raw['nh'] is not None: checks.append(('New Hire',*validate('New Hire',raw['nh'],['Employee ID','WID','Hire Date','Candidate Cost Center ID'],['Candidate Position ID'])))
-if raw['jc'] is not None: checks.append(('Job Change',*validate('Job Change',raw['jc'],['Employee ID','WID','Effective Date','Job Code - Proposed'])))
+if raw['jc'] is not None: checks.append(('Job Change',*validate('Job Change',raw['jc'],['Employee ID','WID','Effective Date','Job Code - Proposed'],job_change=True)))
 checks.append(('Training History',*validate('Training History',raw['hist'],['Employee ID','Record Learning Content','Record Completion Status'],['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date'])))
 checks.append(('Available Sessions',*validate('Available Sessions',raw['sess'],['Learning Content Type','Title','Reference ID','Start Date','End Date','Available Seats','WID'],['Availability Status','Locations'])))
 checks.append(('Existing Orientation Schedule',*validate('Existing Orientation Schedule',raw['orient'],['Employee ID','Enrolled Course Offering','Registration Status','Start Date','End Date'],['WID','Locations'])))

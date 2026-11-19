@@ -87,11 +87,15 @@ HEADER_ALIASES={
 'last separation date':{'last separation date','separation date','last termination date'},
 }
 
-def _header_matches(v,canonical):
+def _header_matches(v,canonical,*,job_change=False):
     hv=header_norm(v); ck=header_norm(canonical)
-    return hv==ck or hv in (HEADER_ALIASES.get(ck,set())|{ck})
+    return (
+        hv==ck
+        or hv in HEADER_ALIASES.get(ck,())
+        or (job_change and ck=='wid' and hv=='workday id')
+    )
 
-def read_sheet(source,required_headers,optional_headers=None,sheet=None,scan_rows=150):
+def read_sheet(source,required_headers,optional_headers=None,sheet=None,scan_rows=150,*,job_change=False):
     wb=_open_wb(source); required_headers=list(required_headers); optional_headers=list(optional_headers or [])
     sheets=[wb[sheet]] if sheet else list(wb.worksheets)
     best=(0,None,None,[],[]); selected=None
@@ -99,7 +103,7 @@ def read_sheet(source,required_headers,optional_headers=None,sheet=None,scan_row
         for i,row in enumerate(ws.iter_rows(values_only=True),1):
             if i>scan_rows: break
             vals=list(row)
-            missing=[h for h in required_headers if not any(_header_matches(v,h) for v in vals)]
+            missing=[h for h in required_headers if not any(_header_matches(v,h,job_change=job_change) for v in vals)]
             matched=[h for h in required_headers if h not in missing]
             if len(matched)>best[0]: best=(len(matched),ws.title,i,vals,missing)
             if not missing:
@@ -116,7 +120,7 @@ def read_sheet(source,required_headers,optional_headers=None,sheet=None,scan_row
     ws,hr,hv=selected; raw_headers=list(hv); canon={}
     for h in required_headers+optional_headers:
         exact=next((i for i,v in enumerate(raw_headers) if header_norm(v)==header_norm(h)),None)
-        alias=next((i for i,v in enumerate(raw_headers) if _header_matches(v,h)),None)
+        alias=next((i for i,v in enumerate(raw_headers) if _header_matches(v,h,job_change=job_change)),None)
         j=exact if exact is not None else alias
         if j is not None: canon[j]=h
     headers=[]; seen=Counter()
@@ -210,7 +214,7 @@ def is_creditable_completion(h):
 def run_scheduler(new_hire_file,job_change_file,history_file,sessions_file,rules_df,locations_df,equivalencies_df=None,orientation_file=None):
     if rules_df is None or rules_df.empty: raise ValueError('Training configuration is empty.')
     nh=read_sheet(new_hire_file,['Employee ID','WID','Hire Date','Candidate Cost Center ID'],['Candidate Position ID','Worker','Worker Type','Traveler Designation','New Hire Position Title','Candidate Department Name','Supervisory Organization ID','Worker Physical Location','Hiring Manager AD (Username)','Email - Primary Work','Email - Primary Home']) if new_hire_file else []
-    jc=read_sheet(job_change_file,['Employee ID','WID','Effective Date','Job Code - Proposed'],['Worker','Worker Type','Job Title - Proposed','Cost Center ID - Requested','Cost Center - Proposed','Sup Org ID - Requested','Location - Proposed','Hiring Manager AD (Username)','Candidate Email','Last Separation Date']) if job_change_file else []
+    jc=read_sheet(job_change_file,['Employee ID','WID','Effective Date','Job Code - Proposed'],['Worker','Worker Type','Job Title - Proposed','Cost Center ID - Requested','Cost Center - Proposed','Sup Org ID - Requested','Location - Proposed','Hiring Manager AD (Username)','Candidate Email','Last Separation Date'],job_change=True) if job_change_file else []
     history=read_sheet(history_file,['Employee ID','Record Learning Content','Record Completion Status'],['Learning Participant','WID','Registration Status',"Learner's Registration Date",'Record Completion Date','Record Grade'])
     sessions_raw=read_sheet(sessions_file,['Learning Content Type','Title','Reference ID','Start Date','End Date','Available Seats','WID'],['Availability Status','Locations'])
     orientation=read_sheet(orientation_file,['Employee ID','Enrolled Course Offering','Registration Status','Start Date','End Date'],['WID','Locations','Reference ID','Course Offering']) if orientation_file else []
